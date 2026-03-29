@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.4.0] - 2026-03-29
+
+### Added
+- **Interactive supervisor** — the supervisor is now a Claude Code session you chat with, not an automated review loop. It acts as a pair programmer and tech lead.
+- **Three-pane session layout** — left: supervisor chat, center top: actions, center bottom: reviews, right: agent chat. All panes scroll independently.
+- **Supervisor chat interface** — full message input/output in the browser, reads from supervisor's JSONL, sends via tmux
+- **Supervisor → agent messaging** — supervisor can send messages to the primary Claude Code agent via tmux send-keys. Enabled when the agent is a ccboard-managed session.
+- **Read-only supervisor** — system prompt restricts supervisor to Read/Grep/Glob/Bash(read-only). Can only write to `.ccboard/` folder.
+- **`.ccboard/` persistent output** — supervisor and its subagents write structured reviews to `.ccboard/{category}.json` and `.ccboard/review.json`. Persists across supervisor restarts.
+- **Review detail modals** — click any review row to see: summary, methodology (criteria, baseline, files checked), findings with severity/location/description/suggestion/evidence
+- **Reviews panel** — bottom half of center pane shows latest review outputs from `.ccboard/`, polls every 15s
+- **Supervisor endpoints** — `/api/sessions/:pid/supervisor/messages`, `/api/sessions/:pid/supervisor/send`, `/api/sessions/:pid/supervisor/reviews`
+- **JSONL path caching** — `resolveJsonlForPid()` caches resolved paths per PID, preventing cross-contamination when supervisor/subagents create JONLs in the same project directory
+- **Supervisor noise filtering** — `isSupervisorNoise()` function filters supervisor-related messages from primary session's actions, messages, and activity payloads
+- **Collapsible action turns** — actions tab shows ALL turns grouped by human message, each collapsible, last expanded by default
+- **Subagent category identification** — each agent brief includes a `category` field the agent must echo back, plus agents write to named files (`.ccboard/codeQuality.json` etc.)
+- **Rich subagent methodology** — agents report: files they checked, criteria applied, baseline compared against, evidence for each finding
+
+### Changed
+- Session detail page completely rewritten: tabs replaced with three-pane layout
+- Supervisor architecture: from automated `setInterval`/`setTimeout` tick loop → interactive chat session
+- Supervisor system prompt: from "output JSON only" → full pair programmer role with read-only constraints and agent communication capability
+- All Claude Code launches now use `--dangerously-skip-permissions --model sonnet`
+- Actions API returns grouped turns (`extractActionTurns`) instead of flat action list
+- Sequential supervisor loop (`setTimeout` chain) replaced `setInterval` to prevent double-messaging
+
+### Fixed
+- JSONL cross-contamination: supervisor and subagent JONLs no longer picked up as the primary session's JSONL
+- Double-messaging supervisor: sequential loop + `reviewing` flag + mtime snapshots prevent sending before previous review completes
+- Center pane overflow: `min-width: 0` + `overflow: hidden` on grid children prevents long text from blowing out column widths
+- Plan file cross-contamination: plans now matched by session slug, not "most recent globally"
+
 ## [0.3.0] - 2026-03-29
 
 ### Added

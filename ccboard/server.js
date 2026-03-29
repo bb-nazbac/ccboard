@@ -14,6 +14,9 @@ const CLAUDE_DIR = join(homedir(), ".claude");
 const SESSIONS_DIR = join(CLAUDE_DIR, "sessions");
 const PROJECTS_DIR = join(CLAUDE_DIR, "projects");
 
+// Cache: PID → resolved JSONL path (locked on first resolution, never re-resolved)
+const jsonlPathCache = new Map();
+
 // Encode a cwd path to the project directory name Claude uses
 // /Users/bahaa/Documents/foo_bar baz → -Users-bahaa-Documents-foo-bar-baz
 function cwdToProjectDir(cwd) {
@@ -41,7 +44,26 @@ async function tailFile(filePath, bytes = 16384) {
   }
 }
 
+// Get session IDs belonging to supervisor tmux sessions
+async function getSupervisorSessionIds() {
+  const ids = new Set();
+  const managed = getManagedTmuxSessions();
+  for (const name of managed) {
+    if (!name.includes("-sup-")) continue;
+    try {
+      const panePid = execSync(
+        `tmux list-panes -t ${name} -F "#{pane_pid}" 2>/dev/null`,
+        { encoding: "utf-8" }
+      ).trim();
+      const raw = await readFile(join(SESSIONS_DIR, `${panePid}.json`), "utf-8");
+      ids.add(JSON.parse(raw).sessionId);
+    } catch {}
+  }
+  return ids;
+}
+
 // Find the most recently modified JSONL in a project directory
+// Excludes JONLs belonging to supervisor sessions
 async function findLatestJsonl(projectDir) {
   const dirPath = join(PROJECTS_DIR, projectDir);
   let files;
@@ -53,10 +75,16 @@ async function findLatestJsonl(projectDir) {
   const jsonls = files.filter((f) => f.endsWith(".jsonl"));
   if (jsonls.length === 0) return null;
 
-  // Find the most recently modified one
+  // Get supervisor session IDs to exclude
+  const supIds = await getSupervisorSessionIds();
+
   let latest = null;
   let latestMtime = 0;
   for (const f of jsonls) {
+    // Skip if this JSONL belongs to a supervisor
+    const sessionId = f.replace(".jsonl", "");
+    if (supIds.has(sessionId)) continue;
+
     try {
       const info = await stat(join(dirPath, f));
       if (info.mtimeMs > latestMtime) {
@@ -285,11 +313,16 @@ async function getSessions() {
       const parts = cwd.split("/");
       const shortName = parts[parts.length - 1] || parts[parts.length - 2];
 
-      // Get rich context from JSONL
+      // Get rich context from JSONL — resolve and cache path before any supervisor exists
+      await resolveJsonlForPid(data.pid, cwd, data.sessionId);
       const context = await getSessionContext(cwd, data.sessionId);
 
       // Check if this session is in a ccboard-managed tmux session
       const tmuxSession = findTmuxSessionForPid(data.pid);
+
+      // Skip supervisor sessions — they shouldn't appear in the sessions list
+      if (tmuxSession && tmuxSession.includes("-sup-")) continue;
+
       const status = inferStatus(proc, context, tmuxSession);
 
       sessions.push({
@@ -336,6 +369,14 @@ async function resolveJsonlPath(cwd, sessionId) {
   }
 }
 
+// Resolve and cache JSONL path for a PID — once locked, never changes
+async function resolveJsonlForPid(pid, cwd, sessionId) {
+  if (jsonlPathCache.has(pid)) return jsonlPathCache.get(pid);
+  const resolved = await resolveJsonlPath(cwd, sessionId);
+  if (resolved) jsonlPathCache.set(pid, resolved);
+  return resolved;
+}
+
 // Read full JSONL and parse into structured conversation data
 async function readFullConversation(jsonlPath) {
   const raw = await readFile(jsonlPath, "utf-8");
@@ -351,103 +392,106 @@ async function readFullConversation(jsonlPath) {
   return entries;
 }
 
-// Extract the action log since the last human message
-function extractActionLog(entries) {
-  // Find the last human-typed message index
-  let lastHumanIdx = -1;
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const e = entries[i];
-    if (e.type === "user" && e.promptId && !e.sourceToolAssistantUUID) {
-      lastHumanIdx = i;
-      break;
-    }
+// Parse a single action from an assistant entry's content block
+function parseToolAction(block, timestamp) {
+  if (block.type === "text" && block.text?.trim()) {
+    return { type: "assistant_text", text: block.text.slice(0, 2000), timestamp };
   }
+  if (block.type !== "tool_use") return null;
+  const action = { type: "tool_use", tool: block.name, timestamp };
+  const inp = block.input || {};
+  switch (block.name) {
+    case "Bash":
+      action.command = inp.command?.slice(0, 500);
+      action.description = inp.description;
+      break;
+    case "Read":
+      action.filePath = inp.file_path;
+      break;
+    case "Write":
+      action.filePath = inp.file_path;
+      break;
+    case "Edit":
+      action.filePath = inp.file_path;
+      action.oldString = inp.old_string?.slice(0, 200);
+      action.newString = inp.new_string?.slice(0, 200);
+      break;
+    case "Glob":
+      action.pattern = inp.pattern;
+      break;
+    case "Grep":
+      action.pattern = inp.pattern;
+      action.path = inp.path;
+      break;
+    case "Agent":
+      action.description = inp.description;
+      action.agentType = inp.subagent_type;
+      break;
+    default:
+      action.input = JSON.stringify(inp).slice(0, 300);
+  }
+  return action;
+}
 
-  // If no human message found, show last 50 entries
-  const startIdx = lastHumanIdx >= 0 ? lastHumanIdx : Math.max(0, entries.length - 50);
+// Extract human message text from a JSONL entry
+function extractHumanText(entry) {
+  const content = entry.message?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((c) => c.type === "text")
+      .map((c) => c.text)
+      .join("\n");
+  }
+  return "";
+}
 
-  const actions = [];
-  for (let i = startIdx; i < entries.length; i++) {
-    const e = entries[i];
+// Check if a message is supervisor noise
+function isSupervisorNoise(text) {
+  if (!text) return false;
+  return (
+    text.includes("pair-programming supervisor") ||
+    text.includes("latest activity from the session you are supervising") ||
+    text.includes("Provide your initial review as JSON") ||
+    text.includes("Provide your updated review as JSON") ||
+    /^\s*\{"summary"/.test(text)
+  );
+}
 
-    // Human message
+// Extract ALL actions grouped into turns by human message
+function extractActionTurns(entries) {
+  const turns = [];
+  let currentTurn = null;
+
+  for (const e of entries) {
+    // Human message starts a new turn
     if (e.type === "user" && e.promptId && !e.sourceToolAssistantUUID) {
-      const content = e.message?.content;
-      const text =
-        typeof content === "string"
-          ? content
-          : Array.isArray(content)
-            ? content
-                .filter((c) => c.type === "text")
-                .map((c) => c.text)
-                .join("\n")
-            : "";
-      if (text.trim()) {
-        actions.push({
-          type: "human_message",
-          text: text.slice(0, 2000),
-          timestamp: e.timestamp,
-        });
-      }
+      const text = extractHumanText(e);
+      if (!text.trim()) continue;
+      // Skip supervisor noise
+      if (isSupervisorNoise(text)) continue;
+      currentTurn = {
+        humanMessage: text.slice(0, 2000),
+        timestamp: e.timestamp,
+        actions: [],
+      };
+      turns.push(currentTurn);
     }
 
-    // Assistant text or tool use
-    if (e.type === "assistant") {
+    // Assistant actions go into the current turn
+    if (e.type === "assistant" && currentTurn) {
       const content = e.message?.content;
       if (!Array.isArray(content)) continue;
-
       for (const block of content) {
-        if (block.type === "text" && block.text?.trim()) {
-          actions.push({
-            type: "assistant_text",
-            text: block.text.slice(0, 2000),
-            timestamp: e.timestamp,
-          });
-        }
-        if (block.type === "tool_use") {
-          const action = {
-            type: "tool_use",
-            tool: block.name,
-            timestamp: e.timestamp,
-          };
-          const inp = block.input || {};
-          switch (block.name) {
-            case "Bash":
-              action.command = inp.command?.slice(0, 500);
-              action.description = inp.description;
-              break;
-            case "Read":
-              action.filePath = inp.file_path;
-              break;
-            case "Write":
-              action.filePath = inp.file_path;
-              break;
-            case "Edit":
-              action.filePath = inp.file_path;
-              action.oldString = inp.old_string?.slice(0, 200);
-              action.newString = inp.new_string?.slice(0, 200);
-              break;
-            case "Glob":
-              action.pattern = inp.pattern;
-              break;
-            case "Grep":
-              action.pattern = inp.pattern;
-              action.path = inp.path;
-              break;
-            case "Agent":
-              action.description = inp.description;
-              action.agentType = inp.subagent_type;
-              break;
-            default:
-              action.input = JSON.stringify(inp).slice(0, 300);
-          }
-          actions.push(action);
-        }
+        // Skip supervisor JSON responses
+        if (block.type === "text" && isSupervisorNoise(block.text)) continue;
+        const action = parseToolAction(block, e.timestamp);
+        if (action) currentTurn.actions.push(action);
       }
     }
   }
 
-  return actions;
+  return turns;
 }
 
 // Build conversation message chain (human + assistant text only, no tool internals)
@@ -457,23 +501,13 @@ function extractMessageChain(entries) {
   for (const e of entries) {
     // Human messages
     if (e.type === "user" && e.promptId && !e.sourceToolAssistantUUID) {
-      const content = e.message?.content;
-      const text =
-        typeof content === "string"
-          ? content
-          : Array.isArray(content)
-            ? content
-                .filter((c) => c.type === "text")
-                .map((c) => c.text)
-                .join("\n")
-            : "";
-      if (text.trim()) {
-        messages.push({
-          role: "human",
-          text: text.slice(0, 5000),
-          timestamp: e.timestamp,
-        });
-      }
+      const text = extractHumanText(e);
+      if (!text.trim() || isSupervisorNoise(text)) continue;
+      messages.push({
+        role: "human",
+        text: text.slice(0, 5000),
+        timestamp: e.timestamp,
+      });
     }
 
     // Assistant text responses (not tool calls)
@@ -481,7 +515,7 @@ function extractMessageChain(entries) {
       const content = e.message?.content;
       if (!Array.isArray(content)) continue;
       const textParts = content
-        .filter((c) => c.type === "text" && c.text?.trim())
+        .filter((c) => c.type === "text" && c.text?.trim() && !isSupervisorNoise(c.text))
         .map((c) => c.text);
       if (textParts.length > 0) {
         messages.push({
@@ -550,18 +584,18 @@ app.get("/api/sessions", async (_req, res) => {
   res.json(sessions);
 });
 
-// Session detail: action log since last human message
+// Session detail: all actions grouped by turn
 app.get("/api/sessions/:pid/actions", async (req, res) => {
   const sessions = await getSessions();
   const session = sessions.find((s) => s.pid === Number(req.params.pid));
   if (!session) return res.status(404).json({ error: "session not found" });
 
-  const jsonlPath = await resolveJsonlPath(session.cwd, session.sessionId);
+  const jsonlPath = await resolveJsonlForPid(session.pid, session.cwd, session.sessionId);
   if (!jsonlPath) return res.json([]);
 
   const entries = await readFullConversation(jsonlPath);
-  const actions = extractActionLog(entries);
-  res.json(actions);
+  const turns = extractActionTurns(entries);
+  res.json(turns);
 });
 
 // Session detail: message chain
@@ -570,7 +604,7 @@ app.get("/api/sessions/:pid/messages", async (req, res) => {
   const session = sessions.find((s) => s.pid === Number(req.params.pid));
   if (!session) return res.status(404).json({ error: "session not found" });
 
-  const jsonlPath = await resolveJsonlPath(session.cwd, session.sessionId);
+  const jsonlPath = await resolveJsonlForPid(session.pid, session.cwd, session.sessionId);
   if (!jsonlPath) return res.json([]);
 
   const entries = await readFullConversation(jsonlPath);
@@ -584,7 +618,7 @@ app.get("/api/sessions/:pid/context", async (req, res) => {
   const session = sessions.find((s) => s.pid === Number(req.params.pid));
   if (!session) return res.status(404).json({ error: "session not found" });
 
-  const jsonlPath = await resolveJsonlPath(session.cwd, session.sessionId);
+  const jsonlPath = await resolveJsonlForPid(session.pid, session.cwd, session.sessionId);
   if (!jsonlPath) return res.json({});
 
   const entries = await readFullConversation(jsonlPath);
@@ -666,7 +700,7 @@ app.post("/api/launch", (req, res) => {
     .slice(0, 40);
 
   // Build the claude command
-  let claudeCmd = "claude";
+  let claudeCmd = "claude --dangerously-skip-permissions --model sonnet";
   if (resume && sessionId) {
     claudeCmd += ` --resume ${sessionId}`;
   } else if (resume) {
@@ -815,6 +849,520 @@ app.get("/api/resumable", async (_req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ============================================================
+// Supervisor system — tmux Claude Code session with Agent subagents
+// ============================================================
+
+// Track active supervisors: primaryPid → { tmuxSession, interval, jsonlPath, results, reviewing, lastCommitHash }
+const supervisors = new Map();
+
+// The supervisor is a single Claude Code session that delegates to Agent subagents.
+// Each review cycle, we send it a message with: what changed since last review,
+// prior reports, and instructions to delegate to 4 specialist Agents.
+
+function buildSupervisorSystemPrompt(primaryTmuxSession) {
+  const sendCmd = primaryTmuxSession
+    ? `To send a message to the agent, write it to /tmp/ccboard-relay.txt then run: tmux load-buffer /tmp/ccboard-relay.txt && tmux paste-buffer -t ${primaryTmuxSession} && sleep 0.5 && tmux send-keys -t ${primaryTmuxSession} Enter`
+    : "The agent session is not managed by ccboard — you cannot send messages to it directly. Ask the human to relay.";
+
+  return `You are a SUPERVISOR — an interactive pair programmer and tech lead monitoring a Claude Code agent session.
+
+IDENTITY:
+- You are the thinking partner. The human talks to you about strategy, planning, and analysis.
+- The Claude Code agent (in a separate session) handles execution — writing code, running commands.
+- You keep your context clean for thinking. The agent carries the execution context.
+
+CAPABILITIES — READ ONLY:
+- You CAN read any file (Read, Grep, Glob, Bash with read-only commands like cat, ls, find, git log, git diff)
+- You CAN spawn Agent subagents for analysis — they MUST also be read-only
+- You CAN write ONLY to the .ccboard/ folder (for review outputs, notes, plans)
+- You MUST NOT write, edit, or modify any project files outside .ccboard/
+- You MUST NOT run destructive Bash commands (no rm, no git commit, no npm install, etc.)
+
+COMMUNICATING WITH THE AGENT:
+${sendCmd}
+Only send messages to the agent when the human asks you to, or when you detect a critical issue that needs immediate intervention.
+
+REVIEW OUTPUTS:
+When you run analysis (on your own initiative or when asked), write results to .ccboard/:
+- .ccboard/review.json — combined review (same format as before)
+- .ccboard/{category}.json — individual category reviews
+- .ccboard/notes.md — your running notes, observations, plans
+First run: mkdir -p .ccboard && add .ccboard/ to .gitignore if not there.
+
+Review JSON format for each category:
+{"category":"...","status":"ok|warning|issue","summary":"...","methodology":{"filesChecked":[...],"criteria":"...","baseline":"..."},"findings":[{"severity":"high|medium|low","location":"file:line","description":"...","suggestion":"...","evidence":"..."}]}
+
+Combined .ccboard/review.json:
+{"summary":{"lastFewHours":"...","lastTenMinutes":"...","rightNow":"...","upNext":"..."},"review":{"codeQuality":<...>,"security":<...>,"scalability":<...>,"contextDrift":<...>},"reviewedAt":"<ISO timestamp>"}
+
+STAYING ACTIVE:
+- When you finish responding, tell the human what you're watching for or what you'd suggest next.
+- Don't just say "let me know if you need anything" — proactively suggest what to review, what to check, what the agent should do next.
+- You are a pair programmer, not a help desk.
+
+READING THE AGENT'S CONVERSATION:
+The human may paste the agent's recent activity or you may be given it in context. You can also check the agent's work by reading files it has modified (use git diff, git log).`;
+}
+
+// Get git commit hash for incremental tracking
+function getGitHead(cwd) {
+  try {
+    return execSync("git rev-parse HEAD 2>/dev/null", { cwd, encoding: "utf-8" }).trim();
+  } catch {
+    return null;
+  }
+}
+
+// Build the review message sent to the supervisor each cycle
+async function buildReviewMessage(session, sup) {
+  const parts = [];
+
+  parts.push(`Project: ${session.shortName} (${session.cwd})`);
+
+  // Collect ALL diffs — committed since last review + uncommitted working tree
+  let allDiffs = "";
+
+  const currentHash = getGitHead(session.cwd);
+  if (sup.lastCommitHash && currentHash && sup.lastCommitHash !== currentHash) {
+    try {
+      const committed = execSync(`git diff ${sup.lastCommitHash}..${currentHash}`, {
+        cwd: session.cwd, encoding: "utf-8", timeout: 10000,
+      }).trim();
+      if (committed) allDiffs += `COMMITTED SINCE LAST REVIEW (${sup.lastCommitHash.slice(0, 7)}..${currentHash.slice(0, 7)}):\n${committed}\n\n`;
+    } catch {}
+  }
+
+  // Always include uncommitted changes (staged + unstaged)
+  try {
+    const uncommitted = execSync("git diff && git diff --staged", {
+      cwd: session.cwd, encoding: "utf-8", timeout: 10000,
+    }).trim();
+    if (uncommitted) allDiffs += `UNCOMMITTED WORKING TREE CHANGES:\n${uncommitted}`;
+  } catch {}
+
+  if (!allDiffs.trim()) allDiffs = "No code changes detected.";
+  allDiffs = allDiffs.slice(0, 10000);
+
+  // Recent activity from JSONL
+  let activityLog = "No recent activity.";
+  if (sup.jsonlPath) {
+    const entries = await readFullConversation(sup.jsonlPath);
+    const turns = extractActionTurns(entries);
+    const recentTurns = turns.slice(-5);
+    const lines = [];
+    for (const t of recentTurns) {
+      if (isSupervisorNoise(t.humanMessage)) continue;
+      const time = t.timestamp ? new Date(t.timestamp).toLocaleTimeString("en-GB") : "";
+      lines.push(`[${time}] USER: ${t.humanMessage?.slice(0, 200)}`);
+      for (const a of t.actions) {
+        if (a.type === "tool_use") {
+          lines.push(`  ${a.tool}: ${(a.command || a.filePath || a.description || "").slice(0, 150)}`);
+        }
+      }
+    }
+    if (lines.length) activityLog = lines.join("\n");
+  }
+
+  // Load plan for context drift
+  let plan = "";
+  if (session.slug) {
+    try {
+      plan = await readFile(join(CLAUDE_DIR, "plans", `${session.slug}.md`), "utf-8");
+      plan = plan.trim().slice(0, 2000);
+    } catch {}
+  }
+
+  // Get prior results per category
+  const prior = sup.results?.review || {};
+
+  // Build pre-packaged briefs for each agent
+  function agentInstructions(category) {
+    return `You are reviewing code. Use Read/Grep/Glob to investigate actual files — don't just read the diff.
+After your analysis, you MUST write your result to .ccboard/${category}.json using the Write tool.
+The JSON format:
+{
+  "category": "${category}",
+  "status": "ok|warning|issue",
+  "summary": "1-2 sentence overview",
+  "methodology": {
+    "filesChecked": ["list of files you actually read or grepped"],
+    "criteria": "what rules/standards you checked against",
+    "baseline": "what you compared to (prior report, best practices, project conventions, etc)"
+  },
+  "findings": [
+    {
+      "severity": "high|medium|low",
+      "location": "file:line",
+      "description": "what the issue is",
+      "suggestion": "how to fix it",
+      "evidence": "the actual code snippet or pattern you found"
+    }
+  ]
+}
+IMPORTANT: "category" MUST be "${category}". Write the file to .ccboard/${category}.json.
+If no issues, return status "ok" with empty findings but still fill in methodology.`;
+  }
+
+  parts.push(`RECENT ACTIVITY:\n${activityLog}`);
+
+  parts.push(`=== AGENT_BRIEF_START: CODE_QUALITY ===
+${agentInstructions("codeQuality")}
+Focus: code smells, anti-patterns, missing error handling at system boundaries, poor naming, dead code, unnecessary complexity.
+PRIOR FINDINGS: ${JSON.stringify(prior.codeQuality || { status: "ok", findings: [] })}
+CODE CHANGES:\n${allDiffs}
+Start from prior findings. Check if they still apply. Then review new changes. Skip unchanged files.
+=== AGENT_BRIEF_END ===`);
+
+  parts.push(`=== AGENT_BRIEF_START: SECURITY ===
+${agentInstructions("security")}
+Focus: secrets/API keys in code or git, injection vulnerabilities (SQL/XSS/command), insecure auth patterns, sensitive data in logs, .env files in version control.
+PRIOR FINDINGS: ${JSON.stringify(prior.security || { status: "ok", findings: [] })}
+CODE CHANGES:\n${allDiffs}
+Start from prior findings. Check if they still apply. Grep for patterns like passwords, tokens, API keys in changed files.
+=== AGENT_BRIEF_END ===`);
+
+  parts.push(`=== AGENT_BRIEF_START: SCALABILITY ===
+${agentInstructions("scalability")}
+Focus: O(n²)+ algorithms, N+1 queries, unbounded queries/loops, missing pagination, synchronous blocking in async, memory leaks.
+PRIOR FINDINGS: ${JSON.stringify(prior.scalability || { status: "ok", findings: [] })}
+CODE CHANGES:\n${allDiffs}
+Start from prior findings. Check if they still apply. Only deep-dive into changed files.
+=== AGENT_BRIEF_END ===`);
+
+  parts.push(`=== AGENT_BRIEF_START: CONTEXT_DRIFT ===
+${agentInstructions("contextDrift")}
+Focus: is work aligned with the plan? Has the session wandered into unrelated files? Going in circles? Signs of confusion?
+PRIOR FINDINGS: ${JSON.stringify(prior.contextDrift || { status: "ok", findings: [] })}
+${plan ? `EXECUTION PLAN:\n${plan}` : "No execution plan found."}
+RECENT ACTIVITY:\n${activityLog}
+Start from prior findings. Check if drift has gotten worse, resolved, or if new drift appeared.
+=== AGENT_BRIEF_END ===`);
+
+  parts.push("Now spawn 4 Agents in parallel — one per AGENT_BRIEF section above. Pass each its exact brief. Collect results and output the final JSON.");
+
+  // Update hash for next cycle
+  sup.lastCommitHash = currentHash;
+
+  return parts.join("\n\n");
+}
+
+// Read the supervisor's review output from .ccboard/review.json in the project
+async function readSupervisorResults(primaryCwd) {
+  try {
+    const raw = await readFile(join(primaryCwd, ".ccboard", "review.json"), "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed.summary && parsed.review) {
+      // Convert reviewedAt to ms if it's an ISO string
+      if (parsed.reviewedAt && typeof parsed.reviewedAt === "string") {
+        parsed.reviewedAt = new Date(parsed.reviewedAt).getTime();
+      }
+      return parsed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// Supervisor loop — sequential, never overlapping
+async function supervisorLoop(primaryPid) {
+  const sup = supervisors.get(primaryPid);
+  if (!sup || sup.stopped) return;
+
+  try {
+    // Wait for supervisor to be ready
+    if (!isTmuxPaneWaiting(sup.tmuxSession)) {
+      // Still working — check again later
+      sup.timeout = setTimeout(() => supervisorLoop(primaryPid), 10000);
+      return;
+    }
+
+    // If we sent a message last cycle, read results now
+    if (sup.reviewing) {
+      const sessions = await getSessions();
+      const primary = sessions.find((s) => s.pid === primaryPid);
+      if (primary) {
+        const latestResults = await readSupervisorResults(primary.cwd);
+        if (latestResults) sup.results = latestResults;
+      }
+      sup.reviewing = false;
+      // Snapshot mtime so we don't re-trigger until real activity
+      try {
+        const info = await stat(sup.jsonlPath);
+        sup.lastJsonlMtime = info.mtimeMs;
+      } catch {}
+    }
+
+    // Get primary session
+    const sessions = await getSessions();
+    const primary = sessions.find((s) => s.pid === primaryPid);
+    if (!primary) {
+      // Primary gone — stop
+      try { execSync(`tmux kill-session -t ${sup.tmuxSession} 2>/dev/null`); } catch {}
+      supervisors.delete(primaryPid);
+      return;
+    }
+
+    // Check if JSONL changed since last review — pause if idle
+    let shouldReview = false;
+    try {
+      const info = await stat(sup.jsonlPath);
+      if (!sup.lastJsonlMtime || info.mtimeMs > sup.lastJsonlMtime) {
+        sup.lastJsonlMtime = info.mtimeMs;
+        shouldReview = true;
+      }
+    } catch {}
+
+    if (shouldReview) {
+      // Build and send review message
+      const msg = await buildReviewMessage(primary, sup);
+      try {
+        const tmpFile = `/tmp/ccboard-sup-${Date.now()}.txt`;
+        const { writeFileSync, unlinkSync } = await import("fs");
+        writeFileSync(tmpFile, msg);
+        execSync(`tmux load-buffer ${tmpFile}`);
+        execSync(`tmux paste-buffer -t ${sup.tmuxSession}`);
+        await new Promise((r) => setTimeout(r, 500));
+        execSync(`tmux send-keys -t ${sup.tmuxSession} Enter`);
+        unlinkSync(tmpFile);
+      } catch {}
+      sup.reviewing = true;
+    }
+  } catch {}
+
+  // Schedule next check — only ONE at a time, no overlap possible
+  sup.timeout = setTimeout(() => supervisorLoop(primaryPid), 30000);
+}
+
+// Start supervisor
+app.post("/api/sessions/:pid/supervisor/start", async (req, res) => {
+  const pid = Number(req.params.pid);
+  if (supervisors.has(pid)) {
+    return res.json({ ok: true, tmuxSession: supervisors.get(pid).tmuxSession, already: true });
+  }
+
+  const sessions = await getSessions();
+  const session = sessions.find((s) => s.pid === pid);
+  if (!session) return res.status(404).json({ error: "session not found" });
+
+  const primaryJsonlPath = await resolveJsonlForPid(session.pid, session.cwd, session.sessionId);
+  const tmuxName = `${TMUX_PREFIX}-sup-${session.shortName}`
+    .replace(/[^a-zA-Z0-9_-]/g, "-")
+    .slice(0, 40);
+
+  try {
+    // Kill existing if name collides
+    try { execSync(`tmux kill-session -t ${tmuxName} 2>/dev/null`); } catch {}
+
+    // Launch supervisor Claude Code session with system prompt
+    const primaryTmux = session.managed ? session.tmuxSession : null;
+    const systemPrompt = buildSupervisorSystemPrompt(primaryTmux).replace(/"/g, '\\"');
+    const claudeCmd = `claude --dangerously-skip-permissions --model sonnet --system-prompt "${systemPrompt}"`;
+    execSync(
+      `tmux new-session -d -s ${tmuxName} -c ${JSON.stringify(session.cwd)} ${JSON.stringify(claudeCmd)}`,
+      { timeout: 5000 }
+    );
+
+    const sup = {
+      tmuxSession: tmuxName,
+      stopped: false,
+      jsonlPath: primaryJsonlPath,
+      results: null,
+    };
+    supervisors.set(pid, sup);
+
+    // Send an initial context message once Claude is ready
+    const contextMsg = `You are now supervising the "${session.shortName}" session (${session.cwd}).
+${session.managed ? `The agent is running in tmux session: ${session.tmuxSession}` : "The agent is running in a terminal (not managed by ccboard)."}
+Run: mkdir -p .ccboard && echo '.ccboard/' >> .gitignore (if not already there).
+Then introduce yourself and tell me what you see in this project. Read the recent git log and any CLAUDE.md or README.`;
+
+    let attempts = 0;
+    const sendInitial = async () => {
+      attempts++;
+      if (attempts > 20 || sup.stopped) return;
+      if (!isTmuxPaneWaiting(tmuxName)) {
+        setTimeout(sendInitial, 2000);
+        return;
+      }
+      try {
+        const tmpFile = `/tmp/ccboard-sup-init-${Date.now()}.txt`;
+        const { writeFileSync, unlinkSync } = await import("fs");
+        writeFileSync(tmpFile, contextMsg);
+        execSync(`tmux load-buffer ${tmpFile}`);
+        execSync(`tmux paste-buffer -t ${tmuxName}`);
+        await new Promise((r) => setTimeout(r, 500));
+        execSync(`tmux send-keys -t ${tmuxName} Enter`);
+        unlinkSync(tmpFile);
+      } catch {
+        setTimeout(sendInitial, 2000);
+        return;
+      }
+    };
+    setTimeout(sendInitial, 3000);
+
+    res.json({ ok: true, tmuxSession: tmuxName });
+  } catch (err) {
+    res.status(500).json({ error: `failed to start: ${err.message.slice(0, 200)}` });
+  }
+});
+
+// Stop supervisor
+app.post("/api/sessions/:pid/supervisor/stop", (req, res) => {
+  const pid = Number(req.params.pid);
+  const sup = supervisors.get(pid);
+  if (!sup) return res.json({ ok: true, already: true });
+  sup.stopped = true;
+  if (sup.timeout) clearTimeout(sup.timeout);
+  try { execSync(`tmux kill-session -t ${sup.tmuxSession} 2>/dev/null`); } catch {}
+  supervisors.delete(pid);
+  res.json({ ok: true });
+});
+
+// Get supervisor status and results
+app.get("/api/sessions/:pid/supervisor", async (req, res) => {
+  const pid = Number(req.params.pid);
+  const sup = supervisors.get(pid);
+  if (!sup) return res.json({ active: false });
+
+  const sessions = await getSessions();
+  const primary = sessions.find((s) => s.pid === pid);
+  if (primary) {
+    const latest = await readSupervisorResults(primary.cwd);
+    if (latest) sup.results = latest;
+  }
+
+  const isWaiting = isTmuxPaneWaiting(sup.tmuxSession);
+
+  res.json({
+    active: true,
+    tmuxSession: sup.tmuxSession,
+    isWaiting,
+    latestOutput: sup.results,
+  });
+});
+
+// Get supervisor chat messages (from its JSONL)
+app.get("/api/sessions/:pid/supervisor/messages", async (req, res) => {
+  const pid = Number(req.params.pid);
+  const sup = supervisors.get(pid);
+  if (!sup) return res.json([]);
+
+  const sessions = await getSessions();
+  const primary = sessions.find((s) => s.pid === pid);
+  if (!primary) return res.json([]);
+
+  // Find the supervisor's JSONL
+  let supSessionId;
+  try {
+    const panePid = execSync(
+      `tmux list-panes -t ${sup.tmuxSession} -F "#{pane_pid}" 2>/dev/null`,
+      { encoding: "utf-8" }
+    ).trim();
+    const raw = await readFile(join(SESSIONS_DIR, `${panePid}.json`), "utf-8");
+    supSessionId = JSON.parse(raw).sessionId;
+  } catch {
+    return res.json([]);
+  }
+
+  const projectDir = cwdToProjectDir(primary.cwd);
+  const jsonlPath = join(PROJECTS_DIR, projectDir, `${supSessionId}.jsonl`);
+
+  let raw;
+  try {
+    raw = await readFile(jsonlPath, "utf-8");
+  } catch {
+    return res.json([]);
+  }
+
+  // Extract human + assistant messages
+  const messages = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+
+      if (entry.type === "user" && entry.promptId && !entry.sourceToolAssistantUUID) {
+        const text = extractHumanText(entry);
+        if (text.trim()) {
+          messages.push({ role: "human", text: text.slice(0, 5000), timestamp: entry.timestamp });
+        }
+      }
+
+      if (entry.type === "assistant") {
+        const content = entry.message?.content;
+        if (!Array.isArray(content)) continue;
+        const textParts = content
+          .filter((c) => c.type === "text" && c.text?.trim())
+          .map((c) => c.text);
+        if (textParts.length > 0) {
+          messages.push({ role: "assistant", text: textParts.join("\n").slice(0, 5000), timestamp: entry.timestamp });
+        }
+      }
+    } catch {}
+  }
+
+  res.json(messages);
+});
+
+// Send a message to the supervisor
+app.post("/api/sessions/:pid/supervisor/send", async (req, res) => {
+  const pid = Number(req.params.pid);
+  const sup = supervisors.get(pid);
+  if (!sup) return res.status(404).json({ error: "supervisor not active" });
+
+  if (!isTmuxPaneWaiting(sup.tmuxSession)) {
+    return res.status(400).json({ error: "supervisor is busy" });
+  }
+
+  const { message } = req.body;
+  if (!message || typeof message !== "string")
+    return res.status(400).json({ error: "message required" });
+
+  try {
+    const tmpFile = `/tmp/ccboard-sup-msg-${Date.now()}.txt`;
+    const { writeFileSync, unlinkSync } = await import("fs");
+    writeFileSync(tmpFile, message);
+    execSync(`tmux load-buffer ${tmpFile}`);
+    execSync(`tmux paste-buffer -t ${sup.tmuxSession}`);
+    await new Promise((r) => setTimeout(r, 500));
+    execSync(`tmux send-keys -t ${sup.tmuxSession} Enter`);
+    unlinkSync(tmpFile);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message.slice(0, 200) });
+  }
+});
+
+// Read .ccboard/ review files
+app.get("/api/sessions/:pid/supervisor/reviews", async (req, res) => {
+  const pid = Number(req.params.pid);
+  const sessions = await getSessions();
+  const session = sessions.find((s) => s.pid === pid);
+  if (!session) return res.status(404).json({ error: "session not found" });
+
+  const ccboardDir = join(session.cwd, ".ccboard");
+  const reviews = {};
+
+  // Read individual category files
+  for (const cat of ["codeQuality", "security", "scalability", "contextDrift"]) {
+    try {
+      const raw = await readFile(join(ccboardDir, `${cat}.json`), "utf-8");
+      reviews[cat] = JSON.parse(raw);
+    } catch {}
+  }
+
+  // Read combined review
+  let combined = null;
+  try {
+    const raw = await readFile(join(ccboardDir, "review.json"), "utf-8");
+    combined = JSON.parse(raw);
+  } catch {}
+
+  res.json({ reviews, combined });
 });
 
 // Serve static files

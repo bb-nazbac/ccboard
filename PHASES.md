@@ -70,5 +70,52 @@ Click any session on the dashboard to see its full detail view. Launch, resume, 
 
 ---
 
-## Phase 3 (planned)
-TBD — likely: activity feed across sessions, cost tracking, session naming/tagging.
+## Phase 3: Interactive Supervisor + Three-Pane Layout (current)
+
+The supervisor evolves from an automated reviewer into an interactive pair programmer. The session detail page becomes a three-pane workspace.
+
+### Goals
+- Supervisor as a thinking partner: you plan with it, it delegates execution to the agent
+- Clear separation of concerns: supervisor thinks, agent executes
+- Supervisor's context stays clean (no execution weight)
+- Code reviews run as subagents that read code and write structured outputs to `.ccboard/`
+
+### Features
+| Feature | Status | Description |
+|---|---|---|
+| Three-pane layout | done | Left: supervisor chat, Center: actions (top) + reviews (bottom), Right: agent chat |
+| Supervisor chat | done | Full chat interface — send messages, see responses, supervisor reads from its JSONL |
+| Interactive supervisor | done | Supervisor is a Claude Code session you talk to, not an automated loop |
+| Read-only supervisor | done | System prompt restricts to Read/Grep/Glob only — can only write to `.ccboard/` |
+| Supervisor → agent messaging | done | Supervisor can send messages to the primary agent via tmux send-keys |
+| `.ccboard/` review outputs | done | Subagents write structured reviews to `.ccboard/{category}.json` and `.ccboard/review.json` |
+| Review detail modals | done | Click any review row to see methodology, files checked, criteria, findings with evidence |
+| Collapsible action turns | done | All turns shown, grouped by human message, last expanded, rest collapsed |
+| JSONL path caching | done | Each session's JSONL resolved once and cached by PID — prevents cross-contamination |
+| Supervisor noise filtering | done | `isSupervisorNoise()` filters supervisor messages from primary session's actions/messages |
+| Sequential supervisor loop | done | `setTimeout`-based loop replaces `setInterval` — no double-messaging |
+| `--dangerously-skip-permissions` | done | All Claude Code launches skip permission prompts |
+| `--model sonnet` | done | All launches use Sonnet 4.6 |
+
+### Architecture
+- **Supervisor = interactive Claude Code session in tmux**, not an automated review loop
+- **System prompt** tells it: read-only, can spawn read-only Agent subagents, can write only to `.ccboard/`, can message the primary agent via tmux
+- **`.ccboard/` folder** = the supervisor's persistent memory. Survives context resets. Contains review.json, category JSONs, notes.md
+- **Three-pane UI**: supervisor chat (left), actions + reviews (center split), agent chat (right)
+- **JSONL isolation**: PID → JSONL path cached on first resolution. Supervisor JONLs excluded from `findLatestJsonl`. `isSupervisorNoise()` filters at extraction level.
+
+### Key learnings
+- Automated supervisor loops are fragile: double-messaging, feedback loops, stale context. Interactive mode is simpler and more useful.
+- The supervisor doesn't need execution context — it delegates to the agent. This keeps its context window clean for thinking.
+- `.ccboard/` as a filesystem-based output channel is more reliable than parsing JONLs or scraping tmux panes.
+- Subagent category confusion is solved by having each agent write to a named file (`.ccboard/codeQuality.json`), not by hoping the supervisor maps outputs correctly.
+
+### Open questions for Phase 4
+- **Supervisor auto-restart**: when context gets heavy, kill and restart with `.ccboard/` as carry-forward memory
+- **Staying active**: how to keep the supervisor's turn alive for continuous monitoring (currently turn-based)
+- **Cost tracking**: how much are the supervisor and its subagents costing per session
+
+---
+
+## Phase 4 (planned)
+TBD — likely: supervisor context management, continuous monitoring, cross-session activity feed, cost tracking.

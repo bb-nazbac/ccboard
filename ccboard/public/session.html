@@ -29,11 +29,7 @@
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
-
-    html, body {
-      height: 100%;
-      overflow: hidden;
-    }
+    html, body { height: 100%; overflow: hidden; }
 
     body {
       background: var(--bg);
@@ -60,32 +56,26 @@
       z-index: 9998;
     }
 
-    /* Full-height flex layout */
+    /* Full-height layout */
     .screen {
       display: flex;
       flex-direction: column;
       height: 100vh;
-      padding: 16px 20px 0;
-      max-width: 880px;
-      margin: 0 auto;
+      padding: 10px 12px 0;
     }
 
-    /* Header — fixed */
+    /* Header bar */
     .header {
-      border-bottom: 1px solid #161616;
-      padding-bottom: 10px;
-      margin-bottom: 14px;
       display: flex;
       justify-content: space-between;
       align-items: center;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #161616;
+      margin-bottom: 8px;
       flex-shrink: 0;
     }
 
-    .header-left {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
+    .header-left { display: flex; align-items: center; gap: 10px; }
 
     .back {
       color: var(--green-dim);
@@ -93,223 +83,241 @@
       font-size: 12px;
       padding: 2px 6px;
       border: 1px solid #1a1a1a;
-      transition: border-color 0.15s;
     }
-
     .back:hover { border-color: var(--green-faint); }
 
-    .session-title {
-      font-size: 14px;
-      color: var(--text-bright);
-      letter-spacing: 1px;
-    }
+    .session-title { font-size: 14px; color: var(--text-bright); letter-spacing: 1px; }
+    .session-slug { font-size: 10px; color: #2a2a2a; }
 
-    .session-slug-header {
-      font-size: 10px;
-      color: #2a2a2a;
-    }
+    .header-right { display: flex; align-items: center; gap: 8px; }
 
-    .header-right {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-size: 11px;
-    }
-
-    .status-badge {
-      padding: 2px 8px;
-      font-size: 10px;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-    }
-
+    .status-badge { padding: 2px 8px; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
     .status-badge.waiting { color: var(--amber); border: 1px solid var(--amber-dim); }
     .status-badge.working { color: var(--cyan); border: 1px solid var(--cyan-dim); }
     .status-badge.idle { color: var(--text-dim); border: 1px solid #222; }
 
     .tty-badge { color: #333; font-size: 10px; }
 
-    /* Context bar — fixed */
-    .context-bar {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
+    /* Context bar */
+    .context-row {
+      display: flex;
       gap: 1px;
-      margin-bottom: 12px;
-      background: #111;
+      margin-bottom: 8px;
       flex-shrink: 0;
     }
 
-    .context-stat {
+    .ctx-stat {
+      flex: 1;
       background: var(--bg-card);
-      padding: 6px 10px;
+      padding: 4px 8px;
       text-align: center;
     }
+    .ctx-stat .v { font-size: 14px; color: var(--text-bright); }
+    .ctx-stat .v.warn { color: var(--amber); }
+    .ctx-stat .v.crit { color: var(--red); }
+    .ctx-stat .l { font-size: 8px; color: #333; text-transform: uppercase; letter-spacing: 1px; }
 
-    .context-stat .value { font-size: 15px; color: var(--text-bright); }
-    .context-stat .label { font-size: 9px; color: #333; text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; }
-    .context-stat .value.warn { color: var(--amber); }
-    .context-stat .value.crit { color: var(--red); }
-
-    /* Token bar — fixed */
-    .token-bar-wrap { margin-bottom: 12px; flex-shrink: 0; }
-    .token-bar-label { font-size: 10px; color: #333; margin-bottom: 4px; display: flex; justify-content: space-between; }
-    .token-bar { height: 3px; background: #111; }
-    .token-bar-fill { height: 100%; transition: width 0.3s ease; }
+    .token-bar { height: 2px; background: #111; margin-bottom: 8px; flex-shrink: 0; }
+    .token-bar-fill { height: 100%; transition: width 0.3s; }
     .token-bar-fill.ok { background: var(--green-faint); }
     .token-bar-fill.warn { background: var(--amber-dim); }
     .token-bar-fill.crit { background: var(--red-dim); }
 
-    /* Tabs — fixed */
-    .tabs {
-      display: flex;
-      gap: 0;
-      margin-bottom: 0;
-      border-bottom: 1px solid #161616;
-      flex-shrink: 0;
-    }
-
-    .tab {
-      padding: 8px 16px;
-      font-size: 11px;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      color: var(--text-dim);
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      transition: all 0.15s;
-      background: none;
-      border-top: none;
-      border-left: none;
-      border-right: none;
-      font-family: inherit;
-    }
-
-    .tab:hover { color: var(--text); }
-    .tab.active { color: var(--green); border-bottom-color: var(--green-dim); }
-
-    /* Tab content — scrollable, fills remaining space */
-    .tab-panels {
+    /* Three-pane layout */
+    .panes {
       flex: 1;
+      display: grid;
+      grid-template-columns: 280px 1fr 340px;
+      gap: 1px;
       min-height: 0;
-      position: relative;
     }
 
-    .tab-content {
-      display: none;
-      flex-direction: column;
-      position: absolute;
-      inset: 0;
-      overflow: hidden;
-    }
-
-    .tab-content.active {
+    .pane {
       display: flex;
+      flex-direction: column;
+      min-height: 0;
+      min-width: 0;
+      overflow: hidden;
+      background: var(--bg-card);
     }
 
-    /* Scrollable area inside each tab */
-    .scroll-area {
+    .pane-header {
+      font-size: 9px;
+      color: #333;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      padding: 6px 10px;
+      border-bottom: 1px solid #111;
+      flex-shrink: 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .pane-scroll {
       flex: 1;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      padding-top: 8px;
-      padding-bottom: 8px;
+      padding: 4px;
     }
 
-    /* Push content to bottom so it starts there */
-    .scroll-spacer {
+    .pane-scroll::-webkit-scrollbar { width: 3px; }
+    .pane-scroll::-webkit-scrollbar-track { background: transparent; }
+    .pane-scroll::-webkit-scrollbar-thumb { background: #1a1a1a; }
+
+    .pane-spacer { flex: 1; }
+
+    .pane-split {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .pane-half {
       flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
     }
 
-    .scroll-area::-webkit-scrollbar { width: 4px; }
-    .scroll-area::-webkit-scrollbar-track { background: transparent; }
-    .scroll-area::-webkit-scrollbar-thumb { background: #1a1a1a; }
+    /* === LEFT PANE: Supervisor === */
 
-    /* Actions panel */
-    .action-item {
-      padding: 6px 10px;
-      border-left: 2px solid #1a1a1a;
-      margin-bottom: 2px;
-      background: var(--bg-card);
+    .sup-controls {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      padding: 6px;
       flex-shrink: 0;
     }
 
-    .action-item.tool_use { border-left-color: var(--cyan-faint); }
-    .action-item.assistant_text { border-left-color: var(--green-faint); }
-    .action-item.human_message { border-left-color: var(--amber-faint); }
+    .sup-btn {
+      background: none;
+      border: 1px solid var(--green-faint);
+      color: var(--green-dim);
+      font-family: inherit;
+      font-size: 10px;
+      padding: 4px 10px;
+      cursor: pointer;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+    .sup-btn:hover { background: var(--green-faint); color: var(--green); }
+    .sup-btn.stop { border-color: var(--red-dim); color: var(--red-dim); }
+    .sup-btn.stop:hover { background: rgba(255,51,51,0.1); }
 
-    .action-head {
+    .sup-indicator { font-size: 9px; color: var(--text-dim); letter-spacing: 1px; }
+    .sup-indicator.reviewing { color: var(--cyan-dim); }
+
+    .sup-section-title {
+      font-size: 8px; color: #2a2a2a; letter-spacing: 2px; text-transform: uppercase;
+      padding: 6px 6px 3px; margin-top: 4px;
+    }
+
+    .sup-summary-row {
+      padding: 3px 6px;
+      border-bottom: 1px solid #0a0a0a;
+    }
+    .sup-summary-label { font-size: 8px; color: #333; text-transform: uppercase; letter-spacing: 1px; }
+    .sup-summary-value { font-size: 11px; color: var(--text-dim); line-height: 1.4; }
+
+    .sup-review-item {
+      display: flex;
+      gap: 6px;
+      padding: 5px 6px;
+      cursor: pointer;
+      align-items: baseline;
+      background: #0a0a0a;
+      margin-bottom: 1px;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .sup-review-item:hover { background: var(--bg-card-hover); }
+
+    .sup-review-icon { font-size: 11px; }
+    .sup-review-icon.ok { color: var(--green-dim); }
+    .sup-review-icon.warning { color: var(--amber); }
+    .sup-review-icon.issue { color: var(--red); }
+
+    .sup-review-label { font-size: 9px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; min-width: 80px; }
+    .sup-review-detail { font-size: 10px; color: var(--text-dim); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sup-review-item.warning .sup-review-detail { color: var(--amber-dim); }
+    .sup-review-item.issue .sup-review-detail { color: var(--red-dim); }
+
+    .sup-tmux { font-size: 9px; color: #1a1a1a; padding: 2px 6px; cursor: pointer; }
+    .sup-tmux:hover { color: var(--text-dim); }
+
+    .sup-reviewed-at { font-size: 8px; color: #1a1a1a; }
+
+    .sup-empty { text-align: center; padding: 30px 10px; color: var(--green-faint); font-size: 11px; }
+
+    @keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0; } }
+    .cursor { display:inline-block; width:6px; height:12px; background:var(--green-faint); animation:blink 1s step-end infinite; vertical-align:middle; margin-left:2px; }
+
+    /* === CENTER PANE: Actions === */
+
+    .turn-group { margin-bottom: 2px; }
+
+    .turn-header {
       display: flex;
       align-items: baseline;
-      gap: 8px;
-      margin-bottom: 2px;
+      gap: 6px;
+      padding: 4px 6px;
+      background: #0b0b0b;
+      border-left: 2px solid var(--amber-faint);
+      cursor: pointer;
     }
+    .turn-header:hover { background: #0e0e0e; }
 
-    .action-type { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+    .turn-arrow { font-size: 8px; color: var(--text-dim); width: 8px; }
+    .turn-group.collapsed .turn-arrow { content: ''; }
+
+    .turn-preview { font-size: 11px; color: var(--amber); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .turn-meta { font-size: 8px; color: #2a2a2a; white-space: nowrap; }
+
+    .turn-body { padding-left: 8px; }
+    .turn-group.collapsed .turn-body { display: none; }
+
+    .action-item {
+      padding: 4px 6px;
+      border-left: 2px solid #1a1a1a;
+      margin-bottom: 1px;
+      background: var(--bg-card);
+    }
+    .action-item.tool_use { border-left-color: var(--cyan-faint); }
+    .action-item.assistant_text { border-left-color: var(--green-faint); }
+
+    .action-head { display: flex; gap: 6px; align-items: baseline; margin-bottom: 1px; }
+    .action-type { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; }
     .action-item.tool_use .action-type { color: var(--cyan-dim); }
     .action-item.assistant_text .action-type { color: var(--green-dim); }
-    .action-item.human_message .action-type { color: var(--amber-dim); }
+    .action-time { font-size: 8px; color: #2a2a2a; }
 
-    .action-time { font-size: 9px; color: #2a2a2a; }
+    .action-detail { font-size: 11px; color: var(--text); white-space: pre-wrap; word-break: break-all; max-height: 80px; overflow: hidden; position: relative; }
+    .action-detail.collapsed::after { content:''; position:absolute; bottom:0; left:0; right:0; height:20px; background:linear-gradient(transparent,var(--bg-card)); }
+    .action-file { font-size: 10px; color: var(--cyan-dim); }
+    .action-cmd { font-size: 10px; color: var(--text); background: #080808; padding: 2px 4px; display: inline-block; }
+    .action-desc { font-size: 9px; color: #333; }
 
-    .action-detail {
-      font-size: 12px;
-      color: var(--text);
-      white-space: pre-wrap;
-      word-break: break-all;
-      max-height: 120px;
-      overflow: hidden;
-      position: relative;
-    }
+    /* === RIGHT PANE: Messages === */
 
-    .action-detail.collapsed::after {
-      content: '';
-      position: absolute;
-      bottom: 0; left: 0; right: 0;
-      height: 30px;
-      background: linear-gradient(transparent, var(--bg-card));
-    }
-
-    .action-file { font-size: 11px; color: var(--cyan-dim); }
-    .action-cmd { font-size: 11px; color: var(--text); background: #080808; padding: 3px 6px; margin-top: 2px; display: inline-block; }
-    .action-desc { font-size: 10px; color: #333; }
-
-    /* Messages panel */
     .message {
-      padding: 8px 12px;
-      margin-bottom: 2px;
-      background: var(--bg-card);
-      flex-shrink: 0;
+      padding: 6px 8px;
+      margin-bottom: 1px;
     }
+    .message.human { border-left: 2px solid var(--amber-faint); background: #0b0b0b; }
+    .message.assistant { border-left: 2px solid var(--green-faint); background: var(--bg-card); }
 
-    .message.human { border-left: 2px solid var(--amber-faint); }
-    .message.assistant { border-left: 2px solid var(--green-faint); }
-
-    .message-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
-    .message-role { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+    .message-head { display: flex; gap: 6px; align-items: baseline; margin-bottom: 2px; }
+    .message-role { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; }
     .message.human .message-role { color: var(--amber-dim); }
     .message.assistant .message-role { color: var(--green-dim); }
-    .message-time { font-size: 9px; color: #2a2a2a; }
+    .message-time { font-size: 8px; color: #2a2a2a; }
 
-    .message-text {
-      font-size: 12px;
-      color: var(--text);
-      white-space: pre-wrap;
-      word-break: break-word;
-      line-height: 1.5;
-    }
+    .message-text { font-size: 11px; color: var(--text); white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
 
-    /* Send message — pinned at bottom of messages tab */
-    .send-area {
-      flex-shrink: 0;
-      border-top: 1px solid #161616;
-      padding: 10px 0;
-    }
-
-    .send-bar {
-      display: flex;
-      gap: 8px;
-    }
+    .send-area { flex-shrink: 0; padding: 6px; border-top: 1px solid #111; }
+    .send-bar { display: flex; gap: 4px; }
 
     .send-input {
       flex: 1;
@@ -317,12 +325,10 @@
       border: 1px solid #1a1a1a;
       color: var(--text-bright);
       font-family: inherit;
-      font-size: 12px;
-      padding: 8px 10px;
+      font-size: 11px;
+      padding: 6px 8px;
       outline: none;
-      transition: border-color 0.15s;
     }
-
     .send-input:focus { border-color: var(--green-faint); }
     .send-input::placeholder { color: #2a2a2a; }
 
@@ -331,51 +337,77 @@
       border: 1px solid var(--green-faint);
       color: var(--green-dim);
       font-family: inherit;
-      font-size: 11px;
-      padding: 8px 16px;
+      font-size: 10px;
+      padding: 6px 12px;
       cursor: pointer;
       letter-spacing: 1px;
-      text-transform: uppercase;
-      transition: all 0.15s;
     }
-
     .send-btn:hover { background: var(--green-faint); color: var(--green); }
 
-    .send-status {
-      font-size: 10px;
-      color: var(--green-dim);
-      margin-top: 4px;
-      min-height: 14px;
-    }
-
+    .send-status { font-size: 9px; color: var(--green-dim); margin-top: 2px; min-height: 12px; }
     .send-status.error { color: var(--red-dim); }
 
-    /* Loading */
-    .loading { text-align: center; padding: 40px; color: var(--green-faint); }
+    /* === Review Detail Modal === */
 
-    @keyframes blink {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0; }
+    .review-modal-overlay {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8);
+      z-index: 200; justify-content: center; align-items: center; padding: 20px;
+    }
+    .review-modal-overlay.open { display: flex; }
+
+    .review-modal {
+      background: var(--bg); border: 1px solid #222;
+      width: 600px; max-width: 95vw; max-height: 80vh;
+      display: flex; flex-direction: column;
     }
 
-    .cursor {
-      display: inline-block;
-      width: 7px;
-      height: 13px;
-      background: var(--green-faint);
-      animation: blink 1s step-end infinite;
-      vertical-align: middle;
-      margin-left: 3px;
+    .rm-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 14px; border-bottom: 1px solid #161616; flex-shrink: 0;
     }
+    .rm-title { display: flex; align-items: center; gap: 8px; }
+    .rm-title span { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--text-bright); }
+    .rm-close { background: none; border: 1px solid #222; color: var(--text-dim); font-family: inherit; font-size: 10px; padding: 3px 8px; cursor: pointer; }
+    .rm-close:hover { color: var(--text); }
+
+    .rm-body { overflow-y: auto; padding: 14px; flex: 1; }
+    .rm-body::-webkit-scrollbar { width: 3px; }
+    .rm-body::-webkit-scrollbar-thumb { background: #1a1a1a; }
+
+    .rm-section { margin-bottom: 14px; }
+    .rm-section-title { font-size: 8px; color: #333; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; border-bottom: 1px solid #111; padding-bottom: 3px; }
+    .rm-summary { font-size: 11px; color: var(--text); line-height: 1.4; }
+
+    .rm-method-row { display: grid; grid-template-columns: 90px 1fr; gap: 6px; padding: 2px 0; font-size: 10px; }
+    .rm-method-label { color: #333; text-transform: uppercase; letter-spacing: 1px; font-size: 8px; padding-top: 1px; }
+    .rm-method-value { color: var(--text-dim); }
+    .file-tag { display: inline-block; background: #0a0a0a; border: 1px solid #1a1a1a; padding: 0 4px; margin: 1px; font-size: 9px; color: var(--cyan-dim); }
+
+    .rm-finding { padding: 6px 8px; margin-bottom: 3px; border-left: 2px solid #222; background: #0a0a0a; }
+    .rm-finding.high { border-left-color: var(--red-dim); }
+    .rm-finding.medium { border-left-color: var(--amber-dim); }
+    .rm-finding.low { border-left-color: var(--text-dim); }
+
+    .rm-finding-head { display: flex; gap: 6px; align-items: baseline; margin-bottom: 3px; }
+    .rm-finding-severity { font-size: 8px; text-transform: uppercase; letter-spacing: 1px; padding: 1px 4px; border: 1px solid; }
+    .rm-finding.high .rm-finding-severity { color: var(--red-dim); border-color: var(--red-dim); }
+    .rm-finding.medium .rm-finding-severity { color: var(--amber-dim); border-color: var(--amber-dim); }
+    .rm-finding.low .rm-finding-severity { color: var(--text-dim); border-color: #333; }
+    .rm-finding-location { font-size: 9px; color: var(--cyan-dim); }
+    .rm-finding-desc { font-size: 10px; color: var(--text); margin-bottom: 3px; line-height: 1.3; }
+    .rm-finding-suggestion { font-size: 9px; color: var(--green-dim); margin-bottom: 3px; }
+    .rm-finding-evidence { font-size: 9px; color: var(--text-dim); background: #080808; padding: 3px 6px; white-space: pre-wrap; word-break: break-all; max-height: 60px; overflow-y: auto; border: 1px solid #111; }
+    .rm-no-findings { color: var(--green-dim); font-size: 10px; padding: 8px; text-align: center; }
   </style>
 </head>
 <body>
   <div class="screen">
+    <!-- Header -->
     <div class="header">
       <div class="header-left">
         <a href="/" class="back">← BACK</a>
         <span class="session-title" id="session-title">loading...</span>
-        <span class="session-slug-header" id="session-slug"></span>
+        <span class="session-slug" id="session-slug"></span>
       </div>
       <div class="header-right">
         <span class="status-badge" id="status-badge"></span>
@@ -383,120 +415,116 @@
       </div>
     </div>
 
-    <div class="context-bar">
-      <div class="context-stat">
-        <div class="value" id="ctx-tokens">—</div>
-        <div class="label">context tokens</div>
-      </div>
-      <div class="context-stat">
-        <div class="value" id="ctx-turns">—</div>
-        <div class="label">turns</div>
-      </div>
-      <div class="context-stat">
-        <div class="value" id="ctx-tools">—</div>
-        <div class="label">tool calls</div>
-      </div>
-      <div class="context-stat">
-        <div class="value" id="ctx-pct">—</div>
-        <div class="label">context used</div>
-      </div>
+    <!-- Context stats -->
+    <div class="context-row">
+      <div class="ctx-stat"><div class="v" id="ctx-tokens">—</div><div class="l">tokens</div></div>
+      <div class="ctx-stat"><div class="v" id="ctx-turns">—</div><div class="l">turns</div></div>
+      <div class="ctx-stat"><div class="v" id="ctx-tools">—</div><div class="l">tools</div></div>
+      <div class="ctx-stat"><div class="v" id="ctx-pct">—</div><div class="l">context</div></div>
     </div>
+    <div class="token-bar"><div class="token-bar-fill ok" id="token-fill" style="width:0%"></div></div>
 
-    <div class="token-bar-wrap">
-      <div class="token-bar-label">
-        <span>CONTEXT WINDOW</span>
-        <span id="token-label">— / —</span>
-      </div>
-      <div class="token-bar">
-        <div class="token-bar-fill ok" id="token-fill" style="width: 0%"></div>
-      </div>
-    </div>
-
-    <div class="tabs">
-      <button class="tab active" data-tab="actions">Actions</button>
-      <button class="tab" data-tab="messages">Messages</button>
-    </div>
-
-    <div class="tab-panels">
-      <div class="tab-content active" id="tab-actions">
-        <div class="scroll-area" id="actions-scroll">
-          <div class="scroll-spacer"></div>
-          <div class="loading">loading actions<span class="cursor"></span></div>
+    <!-- Three panes -->
+    <div class="panes">
+      <!-- LEFT: Supervisor Chat -->
+      <div class="pane" id="pane-supervisor">
+        <div class="pane-header">
+          <span>Supervisor</span>
+          <span id="sup-status-text" class="sup-reviewed-at"></span>
+        </div>
+        <div class="pane-scroll" id="sup-chat-scroll">
+          <div class="pane-spacer"></div>
+          <div id="sup-chat-content">
+            <div class="sup-empty" id="sup-empty-state">
+              <button class="sup-btn" id="sup-start">START SUPERVISOR</button>
+            </div>
+          </div>
+        </div>
+        <div class="send-area" id="sup-send-area" style="display:none">
+          <div class="send-bar">
+            <input type="text" class="send-input" id="sup-input" placeholder="Talk to supervisor..." />
+            <button class="send-btn" id="sup-send-btn">SEND</button>
+          </div>
+          <div class="send-status" id="sup-send-status"></div>
         </div>
       </div>
 
-      <div class="tab-content" id="tab-messages">
-        <div class="scroll-area" id="messages-scroll">
-          <div class="scroll-spacer"></div>
-          <div class="loading">loading messages<span class="cursor"></span></div>
+      <!-- CENTER: Actions (top) + Reviews (bottom) -->
+      <div class="pane pane-split">
+        <div class="pane-half">
+          <div class="pane-header">Actions</div>
+          <div class="pane-scroll" id="actions-scroll">
+            <div class="pane-spacer"></div>
+            <div class="sup-empty">loading<span class="cursor"></span></div>
+          </div>
+        </div>
+        <div class="pane-half" style="border-top:1px solid #161616;">
+          <div class="pane-header">
+            <span>Reviews</span>
+            <span class="sup-reviewed-at" id="review-timestamp"></span>
+          </div>
+          <div class="pane-scroll" id="reviews-scroll">
+            <div id="reviews-content">
+              <div class="sup-empty">no reviews yet</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: Agent Messages -->
+      <div class="pane">
+        <div class="pane-header">Agent Chat</div>
+        <div class="pane-scroll" id="messages-scroll">
+          <div class="pane-spacer"></div>
+          <div class="sup-empty">loading<span class="cursor"></span></div>
         </div>
         <div class="send-area" id="send-area"></div>
       </div>
     </div>
   </div>
 
+  <!-- Review detail modal -->
+  <div class="review-modal-overlay" id="review-modal">
+    <div class="review-modal">
+      <div class="rm-header">
+        <div class="rm-title" id="rm-title"></div>
+        <button class="rm-close" id="rm-close">ESC</button>
+      </div>
+      <div class="rm-body" id="rm-body"></div>
+    </div>
+  </div>
+
   <script>
     const pid = window.location.pathname.split('/').pop();
-    const MAX_CONTEXT = 1000000; // Claude Code 1M context window
+    const MAX_CONTEXT = 1000000;
 
-    function escapeHtml(str) {
-      if (!str) return '';
-      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
+    function escapeHtml(s) { return s ? s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') : ''; }
+    function formatTime(ts) { return ts ? new Date(ts).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) : ''; }
+    function formatTokens(n) { return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':String(n); }
 
-    function formatTime(ts) {
-      if (!ts) return '';
-      const d = new Date(ts);
-      return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    }
-
-    function formatTokens(n) {
-      if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-      if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
-      return String(n);
-    }
-
-    // Tabs — scroll to bottom when switching to a tab
-    document.querySelectorAll('.tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        tab.classList.add('active');
-        const panel = document.getElementById('tab-' + tab.dataset.tab);
-        panel.classList.add('active');
-        // Scroll the now-visible scroll area to bottom
-        requestAnimationFrame(() => {
-          const scrollArea = panel.querySelector('.scroll-area');
-          if (scrollArea) scrollArea.scrollTop = scrollArea.scrollHeight;
-        });
-      });
-    });
+    // --- Session info ---
+    let currentSession = null;
 
     async function loadSessionInfo() {
       const res = await fetch('/api/sessions');
       const sessions = await res.json();
-      const session = sessions.find(s => s.pid === Number(pid));
-      if (!session) {
-        document.getElementById('session-title').textContent = 'SESSION NOT FOUND';
-        return null;
-      }
+      currentSession = sessions.find(s => s.pid === Number(pid));
+      if (!currentSession) { document.getElementById('session-title').textContent = 'NOT FOUND'; return; }
 
-      document.getElementById('session-title').textContent = session.shortName;
-      document.getElementById('session-slug').textContent = session.slug || '';
-      document.title = `ccboard — ${session.shortName}`;
+      document.getElementById('session-title').textContent = currentSession.shortName;
+      document.getElementById('session-slug').textContent = currentSession.slug || '';
+      document.title = `ccboard — ${currentSession.shortName}`;
 
       const badge = document.getElementById('status-badge');
-      badge.textContent = session.status;
-      badge.className = 'status-badge ' + session.status;
-
-      document.getElementById('tty-badge').textContent = session.tty;
-      return session;
+      badge.textContent = currentSession.status;
+      badge.className = 'status-badge ' + currentSession.status;
+      document.getElementById('tty-badge').textContent = currentSession.tty;
     }
 
+    // --- Context ---
     async function loadContext() {
       const res = await fetch(`/api/sessions/${pid}/context`);
       const ctx = await res.json();
-
       const total = ctx.totalContextTokens || 0;
       const pct = total > 0 ? Math.round((total / MAX_CONTEXT) * 100) : 0;
 
@@ -506,182 +534,306 @@
 
       const pctEl = document.getElementById('ctx-pct');
       pctEl.textContent = pct + '%';
-      pctEl.className = 'value' + (pct > 80 ? ' crit' : pct > 50 ? ' warn' : '');
-
-      document.getElementById('token-label').textContent =
-        `${formatTokens(total)} / ${formatTokens(MAX_CONTEXT)}`;
+      pctEl.className = 'v' + (pct > 80 ? ' crit' : pct > 50 ? ' warn' : '');
 
       const fill = document.getElementById('token-fill');
       fill.style.width = Math.min(pct, 100) + '%';
       fill.className = 'token-bar-fill ' + (pct > 80 ? 'crit' : pct > 50 ? 'warn' : 'ok');
     }
 
+    // --- Actions (center pane) ---
+    function renderAction(a) {
+      const time = formatTime(a.timestamp);
+      let detail = '';
+      switch (a.type) {
+        case 'assistant_text': {
+          const t = a.text||''; detail = `<div class="action-detail${t.length>200?' collapsed':''}">${escapeHtml(t)}</div>`; break;
+        }
+        case 'tool_use':
+          switch (a.tool) {
+            case 'Bash': detail = `${a.description?`<div class="action-desc">${escapeHtml(a.description)}</div>`:''}<div class="action-cmd">${escapeHtml(a.command||'')}</div>`; break;
+            case 'Read': case 'Write': case 'Edit': detail = `<div class="action-file">${escapeHtml(a.filePath||'')}</div>`; break;
+            case 'Glob': detail = `<div class="action-desc">${escapeHtml(a.pattern||'')}</div>`; break;
+            case 'Grep': detail = `<div class="action-desc">/${escapeHtml(a.pattern||'')}/ ${a.path?'in '+escapeHtml(a.path):''}</div>`; break;
+            case 'Agent': detail = `<div class="action-desc">${escapeHtml(a.agentType||'')} — ${escapeHtml(a.description||'')}</div>`; break;
+            default: detail = a.input ? `<div class="action-detail collapsed">${escapeHtml(a.input)}</div>` : '';
+          }
+          break;
+      }
+      const label = a.type === 'tool_use' ? a.tool : 'CLAUDE';
+      return `<div class="action-item ${a.type}"><div class="action-head"><span class="action-type">${label}</span><span class="action-time">${time}</span></div>${detail}</div>`;
+    }
+
     async function loadActions() {
       const res = await fetch(`/api/sessions/${pid}/actions`);
-      const actions = await res.json();
+      const turns = await res.json();
       const scroll = document.getElementById('actions-scroll');
 
-      if (actions.length === 0) {
-        scroll.innerHTML = '<div class="scroll-spacer"></div><div class="loading">no actions recorded</div>';
-        return;
-      }
+      if (turns.length === 0) { scroll.innerHTML = '<div class="pane-spacer"></div><div class="sup-empty">no actions</div>'; return; }
 
-      const items = actions.map(a => {
-        const time = formatTime(a.timestamp);
-        let detail = '';
-
-        switch (a.type) {
-          case 'human_message':
-            detail = `<div class="action-detail">${escapeHtml(a.text)}</div>`;
-            break;
-          case 'assistant_text': {
-            const text = a.text || '';
-            const isLong = text.length > 300;
-            detail = `<div class="action-detail${isLong ? ' collapsed' : ''}">${escapeHtml(text)}</div>`;
-            break;
-          }
-          case 'tool_use':
-            switch (a.tool) {
-              case 'Bash':
-                detail = `${a.description ? `<div class="action-desc">${escapeHtml(a.description)}</div>` : ''}
-                  <div class="action-cmd">${escapeHtml(a.command || '')}</div>`;
-                break;
-              case 'Read':
-                detail = `<div class="action-file">${escapeHtml(a.filePath || '')}</div>`;
-                break;
-              case 'Write':
-                detail = `<div class="action-file">${escapeHtml(a.filePath || '')}</div>`;
-                break;
-              case 'Edit':
-                detail = `<div class="action-file">${escapeHtml(a.filePath || '')}</div>`;
-                break;
-              case 'Glob':
-                detail = `<div class="action-desc">pattern: ${escapeHtml(a.pattern || '')}</div>`;
-                break;
-              case 'Grep':
-                detail = `<div class="action-desc">/${escapeHtml(a.pattern || '')}/ ${a.path ? 'in ' + escapeHtml(a.path) : ''}</div>`;
-                break;
-              case 'Agent':
-                detail = `<div class="action-desc">${escapeHtml(a.agentType || '')} — ${escapeHtml(a.description || '')}</div>`;
-                break;
-              default:
-                detail = a.input ? `<div class="action-detail collapsed">${escapeHtml(a.input)}</div>` : '';
-            }
-            break;
-        }
-
-        const typeLabel = a.type === 'tool_use' ? a.tool : a.type === 'human_message' ? 'YOU' : 'CLAUDE';
-
-        return `
-          <div class="action-item ${a.type}">
-            <div class="action-head">
-              <span class="action-type">${typeLabel}</span>
-              <span class="action-time">${time}</span>
-            </div>
-            ${detail}
-          </div>`;
+      scroll.innerHTML = '<div class="pane-spacer"></div>' + turns.map((t, i) => {
+        const time = formatTime(t.timestamp);
+        const preview = escapeHtml((t.humanMessage||'').split('\n')[0].slice(0,80));
+        const isLast = i === turns.length - 1;
+        return `<div class="turn-group${isLast?'':' collapsed'}">
+          <div class="turn-header" onclick="this.parentElement.classList.toggle('collapsed')">
+            <span class="turn-arrow">${isLast?'▼':'▶'}</span>
+            <span class="turn-preview">${preview}</span>
+            <span class="turn-meta">${t.actions.length} · ${time}</span>
+          </div>
+          <div class="turn-body">${t.actions.map(a=>renderAction(a)).join('')}</div>
+        </div>`;
       }).join('');
 
-      scroll.innerHTML = '<div class="scroll-spacer"></div>' + items;
-
-      // Scroll to bottom
       scroll.scrollTop = scroll.scrollHeight;
     }
 
-    async function loadMessages(session) {
+    // --- Messages (right pane) ---
+    async function loadMessages() {
       const res = await fetch(`/api/sessions/${pid}/messages`);
       const messages = await res.json();
       const scroll = document.getElementById('messages-scroll');
-      const sendArea = document.getElementById('send-area');
 
       if (messages.length === 0) {
-        scroll.innerHTML = '<div class="scroll-spacer"></div><div class="loading">no messages</div>';
+        scroll.innerHTML = '<div class="pane-spacer"></div><div class="sup-empty">no messages</div>';
       } else {
-        const items = messages.map(m => {
-          const time = formatTime(m.timestamp);
-          return `
-            <div class="message ${m.role}">
-              <div class="message-head">
-                <span class="message-role">${m.role === 'human' ? 'YOU' : 'CLAUDE'}</span>
-                <span class="message-time">${time}</span>
-              </div>
-              <div class="message-text">${escapeHtml(m.text)}</div>
-            </div>`;
+        scroll.innerHTML = '<div class="pane-spacer"></div>' + messages.map(m => {
+          return `<div class="message ${m.role}">
+            <div class="message-head"><span class="message-role">${m.role==='human'?'YOU':'CLAUDE'}</span><span class="message-time">${formatTime(m.timestamp)}</span></div>
+            <div class="message-text">${escapeHtml(m.text)}</div>
+          </div>`;
         }).join('');
-
-        scroll.innerHTML = '<div class="scroll-spacer"></div>' + items;
       }
-
-      // Scroll to bottom
       scroll.scrollTop = scroll.scrollHeight;
 
       // Send area
-      const isWaiting = session?.status === 'waiting';
-      const isManaged = session?.managed;
-      const canSend = isWaiting && isManaged;
+      const s = currentSession;
+      const canSend = s?.status === 'waiting' && s?.managed;
+      let ph = 'Session not waiting';
+      if (s?.status === 'waiting' && !s?.managed) ph = 'Launch via ccboard to send';
+      if (canSend) ph = 'Type a message...';
 
-      let placeholder = 'Session is not waiting for input';
-      if (isWaiting && !isManaged) placeholder = 'Not a ccboard session — launch via ccboard to enable sending';
-      if (canSend) placeholder = 'Type a message...';
-
-      sendArea.innerHTML = `
+      document.getElementById('send-area').innerHTML = `
         <div class="send-bar">
-          <input type="text" class="send-input" id="send-input"
-            placeholder="${placeholder}"
-            ${!canSend ? 'disabled' : ''} />
-          <button class="send-btn" id="send-btn" ${!canSend ? 'disabled' : ''}>SEND</button>
+          <input type="text" class="send-input" id="send-input" placeholder="${ph}" ${canSend?'':'disabled'} />
+          <button class="send-btn" id="send-btn" ${canSend?'':'disabled'}>SEND</button>
         </div>
-        <div class="send-status" id="send-status">${isWaiting && !isManaged ? 'only sessions launched through ccboard support sending' : ''}</div>`;
+        <div class="send-status" id="send-status"></div>`;
 
       const input = document.getElementById('send-input');
       const btn = document.getElementById('send-btn');
       const status = document.getElementById('send-status');
 
-      async function sendMessage() {
+      async function send() {
         const text = input.value.trim();
         if (!text) return;
         btn.disabled = true;
         status.textContent = 'sending...';
-        status.className = 'send-status';
-
         try {
-          const res = await fetch(`/api/sessions/${pid}/send`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: text }),
-          });
-          const data = await res.json();
-          if (data.ok) {
-            status.textContent = 'sent';
-            input.value = '';
-            input.focus();
-            setTimeout(() => { loadActions(); loadMessages(session); }, 4000);
-          } else {
-            status.textContent = data.error || 'failed';
-            status.className = 'send-status error';
-          }
-        } catch (err) {
-          status.textContent = err.message;
-          status.className = 'send-status error';
-        }
+          const r = await fetch(`/api/sessions/${pid}/send`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({message:text}) });
+          const d = await r.json();
+          if (d.ok) { status.textContent='sent'; input.value=''; input.focus(); setTimeout(()=>{loadActions();loadMessages();},4000); }
+          else { status.textContent=d.error; status.className='send-status error'; }
+        } catch(e) { status.textContent=e.message; status.className='send-status error'; }
         btn.disabled = false;
       }
-
-      btn?.addEventListener('click', sendMessage);
-      input?.addEventListener('keydown', e => {
-        if (e.key === 'Enter') sendMessage();
-      });
+      btn?.addEventListener('click', send);
+      input?.addEventListener('keydown', e => { if(e.key==='Enter') send(); });
     }
 
+    // --- Supervisor Chat (left pane) ---
+    const REVIEW_ICONS = { ok:'✓', warning:'⚠', issue:'✗' };
+    const REVIEW_LABELS = { codeQuality:'CODE QUALITY', security:'SECURITY', scalability:'SCALABILITY', contextDrift:'CONTEXT DRIFT' };
+    let currentReviewData = null;
+    let supervisorActive = false;
+    let supPollInterval = null;
+
+    async function loadSupervisorChat() {
+      const statusRes = await fetch(`/api/sessions/${pid}/supervisor`);
+      const status = await statusRes.json();
+
+      const statusText = document.getElementById('sup-status-text');
+      const emptyState = document.getElementById('sup-empty-state');
+      const sendArea = document.getElementById('sup-send-area');
+      const chatContent = document.getElementById('sup-chat-content');
+
+      if (!status.active) {
+        supervisorActive = false;
+        sendArea.style.display = 'none';
+        chatContent.innerHTML = `<div class="sup-empty"><button class="sup-btn" id="sup-start">START SUPERVISOR</button></div>`;
+        statusText.textContent = '';
+        document.getElementById('sup-start')?.addEventListener('click', startSupervisor);
+        if (supPollInterval) { clearInterval(supPollInterval); supPollInterval = null; }
+        return;
+      }
+
+      supervisorActive = true;
+      sendArea.style.display = '';
+      statusText.innerHTML = `${status.isWaiting ? 'ready' : 'thinking...'} ${status.tmuxSession ? `<span class="sup-tmux" onclick="navigator.clipboard.writeText('tmux attach -t ${escapeHtml(status.tmuxSession)}');this.textContent='copied!'">tmux</span>` : ''}`;
+
+      // Load chat messages
+      const msgRes = await fetch(`/api/sessions/${pid}/supervisor/messages`);
+      const messages = await msgRes.json();
+
+      const scroll = document.getElementById('sup-chat-scroll');
+
+      if (messages.length === 0) {
+        chatContent.innerHTML = `<div class="sup-empty">supervisor starting<span class="cursor"></span></div>`;
+      } else {
+        chatContent.innerHTML = messages.map(m => `
+          <div class="message ${m.role}">
+            <div class="message-head">
+              <span class="message-role">${m.role==='human'?'YOU':'SUPERVISOR'}</span>
+              <span class="message-time">${formatTime(m.timestamp)}</span>
+            </div>
+            <div class="message-text">${escapeHtml(m.text)}</div>
+          </div>
+        `).join('');
+      }
+
+      scroll.scrollTop = scroll.scrollHeight;
+
+      // Enable/disable input
+      const input = document.getElementById('sup-input');
+      const btn = document.getElementById('sup-send-btn');
+      if (status.isWaiting) {
+        input.disabled = false;
+        btn.disabled = false;
+        input.placeholder = 'Talk to supervisor...';
+      } else {
+        input.disabled = true;
+        btn.disabled = true;
+        input.placeholder = 'Supervisor is thinking...';
+      }
+
+      if (!supPollInterval) supPollInterval = setInterval(loadSupervisorChat, 5000);
+    }
+
+    async function startSupervisor() {
+      await fetch(`/api/sessions/${pid}/supervisor/start`, {method:'POST'});
+      setTimeout(loadSupervisorChat, 2000);
+    }
+
+    async function sendToSupervisor() {
+      const input = document.getElementById('sup-input');
+      const status = document.getElementById('sup-send-status');
+      const text = input.value.trim();
+      if (!text) return;
+
+      input.disabled = true;
+      status.textContent = 'sending...';
+      try {
+        const r = await fetch(`/api/sessions/${pid}/supervisor/send`, {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({message: text}),
+        });
+        const d = await r.json();
+        if (d.ok) { input.value = ''; status.textContent = ''; setTimeout(loadSupervisorChat, 2000); }
+        else { status.textContent = d.error; status.className = 'send-status error'; }
+      } catch(e) { status.textContent = e.message; status.className = 'send-status error'; }
+      input.disabled = false;
+      input.focus();
+    }
+
+    document.getElementById('sup-send-btn').addEventListener('click', sendToSupervisor);
+    document.getElementById('sup-input').addEventListener('keydown', e => { if(e.key==='Enter') sendToSupervisor(); });
+
+    // --- Reviews (bottom of center pane) ---
+    async function loadReviews() {
+      try {
+        const r = await fetch(`/api/sessions/${pid}/supervisor/reviews`);
+        const data = await r.json();
+        const container = document.getElementById('reviews-content');
+        const timestamp = document.getElementById('review-timestamp');
+
+        if (!data.combined && Object.keys(data.reviews||{}).length === 0) {
+          container.innerHTML = '<div class="sup-empty">no reviews yet</div>';
+          timestamp.textContent = '';
+          return;
+        }
+
+        if (data.combined?.reviewedAt) {
+          const t = typeof data.combined.reviewedAt === 'string' ? data.combined.reviewedAt : new Date(data.combined.reviewedAt).toISOString();
+          timestamp.textContent = formatTime(t);
+        }
+
+        const review = data.combined?.review || data.reviews;
+        if (!review) { container.innerHTML = '<div class="sup-empty">no reviews yet</div>'; return; }
+
+        currentReviewData = review;
+        let html = '';
+        for (const [key, label] of Object.entries(REVIEW_LABELS)) {
+          const item = review[key];
+          if (!item) continue;
+          const st = item.status || 'ok';
+          const icon = REVIEW_ICONS[st] || '?';
+          const sum = item.summary || (st==='ok'?'No issues':'See findings');
+          const fc = (item.findings||[]).length;
+          html += `<div class="sup-review-item ${st}" onclick="openReviewModal('${key}','${label}')">
+            <span class="sup-review-icon ${st}">${icon}</span>
+            <span class="sup-review-label">${label}</span>
+            <span class="sup-review-detail">${escapeHtml(sum)}${fc?' ('+fc+')':''}</span>
+          </div>`;
+        }
+        container.innerHTML = html || '<div class="sup-empty">no reviews yet</div>';
+      } catch {
+        document.getElementById('reviews-content').innerHTML = '<div class="sup-empty">no reviews yet</div>';
+      }
+    }
+
+    // --- Review Modal ---
+    function openReviewModal(key, label) {
+      if (!currentReviewData) return;
+      const item = currentReviewData[key];
+      if (!item) return;
+      const st = item.status||'ok';
+      const icon = REVIEW_ICONS[st]||'?';
+      const modal = document.getElementById('review-modal');
+      document.getElementById('rm-title').innerHTML = `<span class="sup-review-icon ${st}" style="font-size:14px">${icon}</span><span>${label}</span>`;
+
+      let html = `<div class="rm-section"><div class="rm-section-title">Summary</div><div class="rm-summary">${escapeHtml(item.summary||'No summary')}</div></div>`;
+
+      if (item.methodology) {
+        const m = item.methodology;
+        html += `<div class="rm-section"><div class="rm-section-title">What was checked</div>`;
+        if (m.criteria) html += `<div class="rm-method-row"><div class="rm-method-label">Criteria</div><div class="rm-method-value">${escapeHtml(m.criteria)}</div></div>`;
+        if (m.baseline) html += `<div class="rm-method-row"><div class="rm-method-label">Compared to</div><div class="rm-method-value">${escapeHtml(m.baseline)}</div></div>`;
+        if (m.filesChecked?.length) html += `<div class="rm-method-row"><div class="rm-method-label">Files</div><div class="rm-method-value">${m.filesChecked.map(f=>`<span class="file-tag">${escapeHtml(f)}</span>`).join('')}</div></div>`;
+        html += `</div>`;
+      }
+
+      html += `<div class="rm-section"><div class="rm-section-title">Findings (${(item.findings||[]).length})</div>`;
+      if (!item.findings?.length) {
+        html += `<div class="rm-no-findings">No issues found</div>`;
+      } else {
+        for (const f of item.findings) {
+          const sev = f.severity||'low';
+          html += `<div class="rm-finding ${sev}">
+            <div class="rm-finding-head"><span class="rm-finding-severity">${sev}</span>${f.location?`<span class="rm-finding-location">${escapeHtml(f.location)}</span>`:''}</div>
+            <div class="rm-finding-desc">${escapeHtml(f.description||'')}</div>
+            ${f.suggestion?`<div class="rm-finding-suggestion">→ ${escapeHtml(f.suggestion)}</div>`:''}
+            ${f.evidence?`<div class="rm-finding-evidence">${escapeHtml(f.evidence)}</div>`:''}
+          </div>`;
+        }
+      }
+      html += `</div>`;
+
+      document.getElementById('rm-body').innerHTML = html;
+      modal.classList.add('open');
+    }
+
+    document.getElementById('rm-close').addEventListener('click', () => document.getElementById('review-modal').classList.remove('open'));
+    document.getElementById('review-modal').addEventListener('click', e => { if(e.target===e.currentTarget) e.currentTarget.classList.remove('open'); });
+    document.addEventListener('keydown', e => { if(e.key==='Escape') document.getElementById('review-modal').classList.remove('open'); });
+
+    // --- Init ---
     async function init() {
-      const session = await loadSessionInfo();
-      await Promise.all([
-        loadContext(),
-        loadActions(),
-        loadMessages(session),
-      ]);
+      await loadSessionInfo();
+      await Promise.all([loadContext(), loadActions(), loadMessages(), loadSupervisorChat(), loadReviews()]);
+      // Poll reviews every 15s
+      setInterval(loadReviews, 15000);
     }
-
     init();
   </script>
 </body>
