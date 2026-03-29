@@ -162,7 +162,11 @@
       background: var(--bg-card);
       border-left: 2px solid transparent;
       transition: background 0.15s ease;
+      cursor: pointer;
+      text-decoration: none;
     }
+
+    a.session { color: inherit; }
 
     .session:hover {
       background: var(--bg-card-hover);
@@ -332,6 +336,160 @@
     .session.just-became-waiting {
       animation: attentionFlash 2s ease-out;
     }
+
+    /* Managed badge */
+    .managed-badge {
+      font-size: 9px;
+      color: var(--green-dim);
+      border: 1px solid var(--green-faint);
+      padding: 0 4px;
+      letter-spacing: 1px;
+    }
+
+    /* Launch bar */
+    .launch-bar {
+      margin-bottom: 14px;
+      display: flex;
+      gap: 6px;
+    }
+
+    .launch-btn {
+      background: none;
+      border: 1px solid var(--green-faint);
+      color: var(--green-dim);
+      font-family: inherit;
+      font-size: 11px;
+      padding: 6px 14px;
+      cursor: pointer;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      transition: all 0.15s;
+    }
+
+    .launch-btn:hover {
+      background: var(--green-faint);
+      color: var(--green);
+    }
+
+    /* Launch modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .modal-overlay.open { display: flex; }
+
+    .modal {
+      background: var(--bg);
+      border: 1px solid #222;
+      padding: 20px;
+      width: 500px;
+      max-width: 90vw;
+    }
+
+    .modal h2 {
+      font-size: 13px;
+      font-weight: normal;
+      color: var(--green-dim);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 14px;
+    }
+
+    .modal label {
+      display: block;
+      font-size: 10px;
+      color: #444;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+      margin-top: 10px;
+    }
+
+    .modal input, .modal select {
+      width: 100%;
+      background: #080808;
+      border: 1px solid #1a1a1a;
+      color: var(--text-bright);
+      font-family: inherit;
+      font-size: 12px;
+      padding: 8px 10px;
+      outline: none;
+    }
+
+    .modal input:focus { border-color: var(--green-faint); }
+
+    .modal-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+      justify-content: flex-end;
+    }
+
+    .modal-cancel {
+      background: none;
+      border: 1px solid #222;
+      color: var(--text-dim);
+      font-family: inherit;
+      font-size: 11px;
+      padding: 6px 14px;
+      cursor: pointer;
+    }
+
+    .modal-submit {
+      background: none;
+      border: 1px solid var(--green-faint);
+      color: var(--green-dim);
+      font-family: inherit;
+      font-size: 11px;
+      padding: 6px 14px;
+      cursor: pointer;
+      letter-spacing: 1px;
+    }
+
+    .modal-submit:hover { background: var(--green-faint); color: var(--green); }
+    .modal-error { color: var(--red-dim); font-size: 10px; margin-top: 8px; }
+
+    .resumable-list {
+      max-height: 200px;
+      overflow-y: auto;
+      margin-top: 8px;
+    }
+
+    .resumable-item {
+      padding: 6px 8px;
+      background: var(--bg-card);
+      margin-bottom: 1px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+
+    .resumable-item:hover { background: var(--bg-card-hover); }
+    .resumable-name { color: var(--text-bright); font-size: 12px; }
+    .resumable-slug { color: #2a2a2a; font-size: 10px; }
+    .resumable-time { color: #2a2a2a; font-size: 10px; }
+
+    /* Rescue command */
+    .rescue-cmd {
+      font-size: 10px;
+      color: #2a2a2a;
+      background: #080808;
+      padding: 2px 6px;
+      cursor: pointer;
+      display: inline-block;
+      margin-top: 1px;
+      transition: color 0.15s;
+    }
+
+    .rescue-cmd:hover { color: var(--text); }
+    .rescue-cmd.copied { color: var(--green-dim); }
   </style>
 </head>
 <body>
@@ -346,11 +504,43 @@
         <span id="session-count">0</span> sessions
       </div>
     </div>
+    <div class="launch-bar">
+      <button class="launch-btn" id="btn-new">+ NEW SESSION</button>
+      <button class="launch-btn" id="btn-resume">RESUME SESSION</button>
+    </div>
     <div class="summary" id="summary"></div>
     <div class="sessions" id="sessions">
       <div class="empty">
         <div class="big">CONNECTING</div>
         scanning for sessions<span class="cursor"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- New session modal -->
+  <div class="modal-overlay" id="modal-new">
+    <div class="modal">
+      <h2>New Session</h2>
+      <label>Working directory</label>
+      <input type="text" id="new-cwd" placeholder="/Users/you/project" />
+      <label>Session name (optional)</label>
+      <input type="text" id="new-name" placeholder="my-feature" />
+      <div class="modal-error" id="new-error"></div>
+      <div class="modal-actions">
+        <button class="modal-cancel" id="new-cancel">CANCEL</button>
+        <button class="modal-submit" id="new-submit">LAUNCH</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Resume session modal -->
+  <div class="modal-overlay" id="modal-resume">
+    <div class="modal">
+      <h2>Resume Session</h2>
+      <div class="resumable-list" id="resumable-list">loading...</div>
+      <div class="modal-error" id="resume-error"></div>
+      <div class="modal-actions">
+        <button class="modal-cancel" id="resume-cancel">CANCEL</button>
       </div>
     </div>
   </div>
@@ -471,7 +661,7 @@
         }
 
         return `
-          <div class="session ${s.status}${staleClass}${flashClass}">
+          <a href="/session/${s.pid}" class="session ${s.status}${staleClass}${flashClass}">
             <div class="status-icon">${STATUS_ICONS[s.status]}</div>
             <div class="session-info">
               <div class="session-top">
@@ -480,13 +670,14 @@
               </div>
               <div class="session-path">${escapeHtml(shortenPath(s.cwd))}</div>
               ${snippetHtml}
+              ${s.managed ? `<div class="rescue-cmd" onclick="event.preventDefault();navigator.clipboard.writeText('tmux attach -t ${escapeHtml(s.tmuxSession)}');this.textContent='copied!';this.classList.add('copied');setTimeout(()=>{this.textContent='tmux attach -t ${escapeHtml(s.tmuxSession)}';this.classList.remove('copied')},1500)">tmux attach -t ${escapeHtml(s.tmuxSession)}</div>` : ''}
             </div>
             <div class="session-meta">
               <div class="session-status">${STATUS_LABELS[s.status]}</div>
               <div class="session-time">${ago}</div>
-              <div class="session-tty">${s.tty}</div>
+              <div class="session-tty">${s.managed ? '<span class="managed-badge">CCB</span> ' : ''}${s.tty}</div>
             </div>
-          </div>`;
+          </a>`;
       }).join('');
 
       // Update page title with attention count
@@ -509,6 +700,98 @@
 
     poll();
     setInterval(poll, 3000);
+
+    // --- Launch / Resume modals ---
+
+    function openModal(id) { document.getElementById(id).classList.add('open'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+    // Close modals on overlay click
+    document.querySelectorAll('.modal-overlay').forEach(el => {
+      el.addEventListener('click', e => { if (e.target === el) closeModal(el.id); });
+    });
+
+    // New session
+    document.getElementById('btn-new').addEventListener('click', () => openModal('modal-new'));
+    document.getElementById('new-cancel').addEventListener('click', () => closeModal('modal-new'));
+    document.getElementById('new-submit').addEventListener('click', async () => {
+      const cwd = document.getElementById('new-cwd').value.trim();
+      const name = document.getElementById('new-name').value.trim();
+      const errEl = document.getElementById('new-error');
+      if (!cwd) { errEl.textContent = 'working directory required'; return; }
+      errEl.textContent = 'launching...';
+      try {
+        const res = await fetch('/api/launch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cwd, name: name || undefined }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          closeModal('modal-new');
+          document.getElementById('new-cwd').value = '';
+          document.getElementById('new-name').value = '';
+          errEl.textContent = '';
+          poll();
+        } else {
+          errEl.textContent = data.error;
+        }
+      } catch (err) { errEl.textContent = err.message; }
+    });
+
+    // Resume session
+    document.getElementById('btn-resume').addEventListener('click', async () => {
+      openModal('modal-resume');
+      const list = document.getElementById('resumable-list');
+      list.innerHTML = 'loading...';
+      try {
+        const res = await fetch('/api/resumable');
+        const sessions = await res.json();
+        if (sessions.length === 0) {
+          list.innerHTML = '<div style="color:#333;padding:20px;text-align:center">no recent sessions found</div>';
+          return;
+        }
+        list.innerHTML = sessions.map(s => {
+          const ago = timeAgo(s.lastModified);
+          return `
+            <div class="resumable-item" data-cwd="${escapeHtml(s.cwd)}" data-sid="${escapeHtml(s.sessionId)}">
+              <div>
+                <span class="resumable-name">${escapeHtml(s.shortName)}</span>
+                <span class="resumable-slug">${escapeHtml(s.slug || '')}</span>
+              </div>
+              <span class="resumable-time">${ago}</span>
+            </div>`;
+        }).join('');
+
+        // Click to resume
+        list.querySelectorAll('.resumable-item').forEach(item => {
+          item.addEventListener('click', async () => {
+            const cwd = item.dataset.cwd;
+            const sessionId = item.dataset.sid;
+            const errEl = document.getElementById('resume-error');
+            errEl.textContent = 'resuming...';
+            try {
+              const res = await fetch('/api/launch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cwd, resume: true, sessionId }),
+              });
+              const data = await res.json();
+              if (data.ok) {
+                closeModal('modal-resume');
+                errEl.textContent = '';
+                poll();
+              } else {
+                errEl.textContent = data.error;
+              }
+            } catch (err) { errEl.textContent = err.message; }
+          });
+        });
+      } catch (err) {
+        list.innerHTML = `<div style="color:var(--red-dim)">${err.message}</div>`;
+      }
+    });
+    document.getElementById('resume-cancel').addEventListener('click', () => closeModal('modal-resume'));
   </script>
 </body>
 </html>
