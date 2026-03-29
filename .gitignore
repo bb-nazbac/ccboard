@@ -1,0 +1,6 @@
+node_modules/
+.DS_Store
+*.log
+
+# Paperclip reference codebase (cloned for study, not part of ccboard)
+paperclip-ref/

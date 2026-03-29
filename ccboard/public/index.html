@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ccboard</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+    :root {
+      --green: #00ff41;
+      --green-dim: #00aa2a;
+      --green-faint: #004d15;
+      --amber: #ffb000;
+      --amber-dim: #aa7500;
+      --amber-faint: #3d2a00;
+      --red: #ff3333;
+      --red-dim: #aa2222;
+      --red-faint: #331111;
+      --cyan: #00ffff;
+      --cyan-dim: #008888;
+      --cyan-faint: #002a2a;
+      --bg: #0a0a0a;
+      --bg-card: #0d0d0d;
+      --bg-card-hover: #121212;
+      --border: #1a1a1a;
+      --text: #888;
+      --text-bright: #ccc;
+      --text-dim: #444;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: var(--bg);
+      color: var(--green);
+      font-family: 'Share Tech Mono', 'Courier New', monospace;
+      font-size: 13px;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* CRT scanline overlay */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0, 0, 0, 0.06) 2px,
+        rgba(0, 0, 0, 0.06) 4px
+      );
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* Subtle vignette */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.4) 100%);
+      pointer-events: none;
+      z-index: 9998;
+    }
+
+    @keyframes flicker {
+      0%, 100% { opacity: 1; }
+      92% { opacity: 1; }
+      93% { opacity: 0.97; }
+      94% { opacity: 1; }
+    }
+
+    .screen {
+      animation: flicker 8s infinite;
+      padding: 16px 20px;
+      max-width: 880px;
+      margin: 0 auto;
+    }
+
+    /* Header */
+    .header {
+      border-bottom: 1px solid #161616;
+      padding-bottom: 10px;
+      margin-bottom: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .header h1 {
+      font-size: 14px;
+      font-weight: normal;
+      color: var(--green-dim);
+      letter-spacing: 3px;
+      text-transform: uppercase;
+    }
+
+    .header .version {
+      font-size: 10px;
+      color: #2a2a2a;
+    }
+
+    .header .meta {
+      font-size: 11px;
+      color: var(--text-dim);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .live-dot {
+      display: inline-block;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--green-dim);
+      animation: pulse 2.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; box-shadow: 0 0 3px var(--green-dim); }
+      50% { opacity: 0.3; box-shadow: none; }
+    }
+
+    /* Summary bar */
+    .summary {
+      display: flex;
+      gap: 14px;
+      margin-bottom: 12px;
+      font-size: 11px;
+      color: var(--text-dim);
+      letter-spacing: 1px;
+    }
+
+    .summary .sep { color: #1a1a1a; }
+    .summary .s-waiting { color: var(--amber-dim); }
+    .summary .s-working { color: var(--cyan-dim); }
+    .summary .s-idle { color: var(--text-dim); }
+
+    /* Session rows */
+    .sessions {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+
+    .session {
+      display: grid;
+      grid-template-columns: 20px 1fr auto;
+      align-items: start;
+      gap: 10px;
+      padding: 9px 10px;
+      background: var(--bg-card);
+      border-left: 2px solid transparent;
+      transition: background 0.15s ease;
+    }
+
+    .session:hover {
+      background: var(--bg-card-hover);
+    }
+
+    .session.waiting { border-left-color: var(--amber); }
+    .session.working { border-left-color: var(--cyan); }
+    .session.idle { border-left-color: #1a1a1a; }
+
+    /* Stale escalation */
+    .session.stale-1 { border-left-color: var(--amber-dim); }
+    .session.stale-2 { border-left-color: var(--red-dim); }
+    .session.stale-3 {
+      border-left-color: var(--red);
+      background: var(--red-faint);
+    }
+
+    /* Status indicator */
+    .status-icon {
+      font-size: 12px;
+      text-align: center;
+      padding-top: 2px;
+    }
+
+    .session.waiting .status-icon { color: var(--amber); }
+    .session.working .status-icon { color: var(--cyan); }
+    .session.idle .status-icon { color: #2a2a2a; }
+
+    @keyframes workPulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .session.working .status-icon {
+      animation: workPulse 1.5s ease-in-out infinite;
+    }
+
+    /* Session info */
+    .session-info {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      overflow: hidden;
+      min-width: 0;
+    }
+
+    .session-top {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    .session-name {
+      font-size: 13px;
+      color: var(--text-bright);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .session.waiting .session-name { color: var(--amber); }
+    .session.working .session-name { color: var(--cyan); }
+    .session.idle .session-name { color: var(--text-dim); }
+
+    .session-slug {
+      font-size: 10px;
+      color: #2a2a2a;
+      white-space: nowrap;
+    }
+
+    .session-path {
+      font-size: 10px;
+      color: #2a2a2a;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .session-snippet {
+      font-size: 11px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-top: 2px;
+      max-width: 100%;
+    }
+
+    .session-snippet .label {
+      color: #2a2a2a;
+    }
+
+    .session.waiting .session-snippet {
+      color: var(--text);
+    }
+
+    /* Right side */
+    .session-meta {
+      text-align: right;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 2px;
+      white-space: nowrap;
+      padding-top: 1px;
+    }
+
+    .session-status {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .session.waiting .session-status { color: var(--amber-dim); }
+    .session.working .session-status { color: var(--cyan-dim); }
+    .session.idle .session-status { color: #2a2a2a; }
+
+    .session-time {
+      font-size: 10px;
+      color: #2a2a2a;
+    }
+
+    .session.stale-2 .session-time,
+    .session.stale-3 .session-time {
+      color: var(--red-dim);
+    }
+
+    .session-tty {
+      font-size: 10px;
+      color: #222;
+    }
+
+    /* Empty state */
+    .empty {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--green-faint);
+    }
+
+    .empty .big {
+      font-size: 14px;
+      margin-bottom: 8px;
+      letter-spacing: 2px;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    .cursor {
+      display: inline-block;
+      width: 7px;
+      height: 13px;
+      background: var(--green-faint);
+      animation: blink 1s step-end infinite;
+      vertical-align: middle;
+      margin-left: 3px;
+    }
+
+    /* Notification flash for newly-waiting sessions */
+    @keyframes attentionFlash {
+      0% { background: var(--amber-faint); }
+      100% { background: var(--bg-card); }
+    }
+
+    .session.just-became-waiting {
+      animation: attentionFlash 2s ease-out;
+    }
+  </style>
+</head>
+<body>
+  <div class="screen">
+    <div class="header">
+      <div class="header-left">
+        <h1>ccboard</h1>
+        <span class="version">v0.1</span>
+      </div>
+      <div class="meta">
+        <span class="live-dot"></span>
+        <span id="session-count">0</span> sessions
+      </div>
+    </div>
+    <div class="summary" id="summary"></div>
+    <div class="sessions" id="sessions">
+      <div class="empty">
+        <div class="big">CONNECTING</div>
+        scanning for sessions<span class="cursor"></span>
+      </div>
+    </div>
+  </div>
+  <script>
+    const STATUS_ICONS = {
+      waiting: '▶',
+      working: '◉',
+      idle: '○',
+    };
+
+    const STATUS_LABELS = {
+      waiting: 'AWAITING INPUT',
+      working: 'WORKING',
+      idle: 'IDLE',
+    };
+
+    // Track previous states for transition detection
+    let prevStates = new Map();
+    let notificationsEnabled = false;
+
+    // Request notification permission on first interaction
+    document.addEventListener('click', () => {
+      if (!notificationsEnabled && 'Notification' in window) {
+        Notification.requestPermission().then(p => {
+          notificationsEnabled = p === 'granted';
+        });
+      }
+    }, { once: true });
+
+    function timeAgo(ms) {
+      const diff = Date.now() - ms;
+      const sec = Math.floor(diff / 1000);
+      if (sec < 30) return 'just now';
+      if (sec < 60) return `${sec}s ago`;
+      const min = Math.floor(sec / 60);
+      if (min < 60) return `${min}m ago`;
+      const hr = Math.floor(min / 60);
+      return `${hr}h ago`;
+    }
+
+    function staleLevel(lastActivity, status) {
+      if (status !== 'waiting') return 0;
+      const idleMin = (Date.now() - lastActivity) / 60000;
+      if (idleMin > 15) return 3;
+      if (idleMin > 10) return 2;
+      if (idleMin > 5) return 1;
+      return 0;
+    }
+
+    function shortenPath(cwd) {
+      return cwd.replace(/^\/Users\/[^/]+/, '~');
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function renderSessions(sessions) {
+      const container = document.getElementById('sessions');
+      const countEl = document.getElementById('session-count');
+      const summaryEl = document.getElementById('summary');
+
+      countEl.textContent = sessions.length;
+
+      if (sessions.length === 0) {
+        container.innerHTML = `
+          <div class="empty">
+            <div class="big">NO ACTIVE SESSIONS</div>
+            monitoring<span class="cursor"></span>
+          </div>`;
+        summaryEl.innerHTML = '';
+        return;
+      }
+
+      // Summary
+      const waiting = sessions.filter(s => s.status === 'waiting').length;
+      const working = sessions.filter(s => s.status === 'working').length;
+      const idle = sessions.filter(s => s.status === 'idle').length;
+
+      const parts = [];
+      if (waiting) parts.push(`<span class="s-waiting">${waiting} awaiting</span>`);
+      if (working) parts.push(`<span class="s-working">${working} working</span>`);
+      if (idle) parts.push(`<span class="s-idle">${idle} idle</span>`);
+      summaryEl.innerHTML = parts.join('<span class="sep">·</span>');
+
+      // Detect transitions for notifications
+      const newStates = new Map();
+      const justBecameWaiting = new Set();
+
+      for (const s of sessions) {
+        newStates.set(s.pid, s.status);
+        const prev = prevStates.get(s.pid);
+        if (prev && prev !== 'waiting' && s.status === 'waiting') {
+          justBecameWaiting.add(s.pid);
+          if (notificationsEnabled) {
+            new Notification(`ccboard: ${s.shortName}`, {
+              body: s.snippet || 'Awaiting your input',
+              tag: `ccboard-${s.pid}`,
+            });
+          }
+        }
+      }
+      prevStates = newStates;
+
+      // Render
+      container.innerHTML = sessions.map(s => {
+        const ago = timeAgo(s.lastActivity);
+        const stale = staleLevel(s.lastActivity, s.status);
+        const staleClass = stale > 0 ? ` stale-${stale}` : '';
+        const flashClass = justBecameWaiting.has(s.pid) ? ' just-became-waiting' : '';
+
+        let snippetHtml = '';
+        if (s.snippet) {
+          snippetHtml = `<div class="session-snippet">${escapeHtml(s.snippet)}</div>`;
+        } else if (s.lastUserMessage) {
+          snippetHtml = `<div class="session-snippet"><span class="label">you: </span>${escapeHtml(s.lastUserMessage)}</div>`;
+        }
+
+        return `
+          <div class="session ${s.status}${staleClass}${flashClass}">
+            <div class="status-icon">${STATUS_ICONS[s.status]}</div>
+            <div class="session-info">
+              <div class="session-top">
+                <span class="session-name">${escapeHtml(s.shortName)}</span>
+                ${s.slug ? `<span class="session-slug">${escapeHtml(s.slug)}</span>` : ''}
+              </div>
+              <div class="session-path">${escapeHtml(shortenPath(s.cwd))}</div>
+              ${snippetHtml}
+            </div>
+            <div class="session-meta">
+              <div class="session-status">${STATUS_LABELS[s.status]}</div>
+              <div class="session-time">${ago}</div>
+              <div class="session-tty">${s.tty}</div>
+            </div>
+          </div>`;
+      }).join('');
+
+      // Update page title with attention count
+      if (waiting > 0) {
+        document.title = `(${waiting}) ccboard`;
+      } else {
+        document.title = 'ccboard';
+      }
+    }
+
+    async function poll() {
+      try {
+        const res = await fetch('/api/sessions');
+        const sessions = await res.json();
+        renderSessions(sessions);
+      } catch {
+        // silent retry
+      }
+    }
+
+    poll();
+    setInterval(poll, 3000);
+  </script>
+</body>
+</html>
