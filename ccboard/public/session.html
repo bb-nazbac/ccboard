@@ -762,6 +762,7 @@
           if (files.length === 0) { statusEl.textContent = 'no files'; return; }
           fileGraph = window.FileGraph.buildFileGraph(files);
           sigmaInstance = window.FileGraph.initSigma(container, fileGraph);
+          window.FileGraph.setupNodeClick(sigmaInstance, fileGraph, container);
           statusEl.textContent = files.length + ' files';
           setTimeout(() => sigmaInstance.getCamera().animatedReset({ duration: 300 }), 500);
         } catch (e) {

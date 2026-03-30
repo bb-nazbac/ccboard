@@ -467,11 +467,12 @@ function parseToolAction(block, timestamp) {
       break;
     case "Write":
       action.filePath = inp.file_path;
+      action.newString = inp.content?.slice(0, 1000);
       break;
     case "Edit":
       action.filePath = inp.file_path;
-      action.oldString = inp.old_string?.slice(0, 200);
-      action.newString = inp.new_string?.slice(0, 200);
+      action.oldString = inp.old_string?.slice(0, 1000);
+      action.newString = inp.new_string?.slice(0, 1000);
       break;
     case "Glob":
       action.pattern = inp.pattern;

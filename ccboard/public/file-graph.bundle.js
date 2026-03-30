@@ -10261,11 +10261,32 @@ void main() {
   var COLORS = {
     folder: "#00aa2a",
     file: "#335588",
-    read: "#00cccc",
-    edit: "#ffb000",
-    active: "#00ffff",
+    // Dimmed versions for untouched nodes
+    folderDim: "#1a2a1a",
+    fileDim: "#181822",
+    edgeDim: "#111111",
+    // Active colors by action type
+    read: { r: 0, g: 204, b: 204 },
+    // cyan
+    edit: { r: 255, g: 176, b: 0 },
+    // amber
+    write: { r: 255, g: 176, b: 0 },
+    // amber
+    grep: { r: 0, g: 170, b: 42 },
+    // green
+    glob: { r: 0, g: 170, b: 42 },
+    // green
+    default: { r: 0, g: 204, b: 204 },
+    // cyan
     edge: "#1a2a1a"
   };
+  function heatToColor(heat, actionType) {
+    const base = COLORS[actionType] || COLORS.default;
+    const r = Math.round(base.r * heat);
+    const g = Math.round(base.g * heat);
+    const b = Math.round(base.b * heat);
+    return `rgb(${r},${g},${b})`;
+  }
   function buildFileGraph(files) {
     const graph = new Graph();
     const folders = /* @__PURE__ */ new Set();
@@ -10278,8 +10299,8 @@ void main() {
     for (const folder of folders) {
       graph.addNode(folder, {
         label: folder.split("/").pop(),
-        size: 6,
-        color: COLORS.folder,
+        size: 2,
+        color: COLORS.folderDim,
         nodeKind: "folder",
         x: (Math.random() - 0.5) * 100,
         y: (Math.random() - 0.5) * 100,
@@ -10289,8 +10310,8 @@ void main() {
     for (const f of files) {
       graph.addNode(f, {
         label: f.split("/").pop(),
-        size: 3,
-        color: COLORS.file,
+        size: 1,
+        color: COLORS.fileDim,
         nodeKind: "file",
         x: (Math.random() - 0.5) * 100,
         y: (Math.random() - 0.5) * 100,
@@ -10339,47 +10360,80 @@ void main() {
       hideEdgesOnMove: false,
       zIndex: true,
       nodeReducer(node, data) {
+        if (data.heat > 0) {
+          return {
+            ...data,
+            color: heatToColor(data.heat, data.lastAction),
+            label: data.label,
+            size: data.size
+          };
+        }
         return {
           ...data,
-          color: data.heat > 0 ? data.heat > 0.8 ? COLORS.active : data.lastAction === "edit" || data.lastAction === "write" ? COLORS.edit : COLORS.read : data.color
+          color: data.nodeKind === "folder" ? COLORS.folderDim : COLORS.fileDim,
+          label: null,
+          size: data.nodeKind === "folder" ? 2 : 1
         };
+      },
+      edgeReducer(edge, data) {
+        if (data.isPathEdge) {
+          return { ...data, color: "#00cccc80", size: 1.5 };
+        }
+        return { ...data, color: COLORS.edgeDim, size: 0.15 };
       }
     });
   }
+  var agentPath = [];
+  var nodeActions = {};
+  function resolveNode(graph, filePath, cwdPrefix) {
+    if (cwdPrefix && filePath.startsWith(cwdPrefix)) {
+      filePath = filePath.slice(cwdPrefix.length);
+    }
+    if (graph.hasNode(filePath)) return filePath;
+    if (graph.hasNode("./" + filePath)) return "./" + filePath;
+    const basename = filePath.split("/").pop();
+    let found = null;
+    graph.forEachNode((node) => {
+      if (!found && (node.endsWith("/" + basename) || node === basename)) found = node;
+    });
+    return found;
+  }
   function applyActivity(graph, allActions, cwd) {
-    graph.forEachNode((node, attrs) => {
+    graph.forEachNode((node) => {
       graph.setNodeAttribute(node, "heat", 0);
       graph.setNodeAttribute(node, "lastAction", null);
-      graph.setNodeAttribute(node, "size", attrs.nodeKind === "folder" ? 6 : 3);
+      graph.setNodeAttribute(node, "size", graph.getNodeAttribute(node, "nodeKind") === "folder" ? 2 : 1);
     });
+    graph.forEachEdge((edge, attrs) => {
+      if (attrs.isPathEdge) graph.dropEdge(edge);
+    });
+    const cwdPrefix = cwd ? cwd.endsWith("/") ? cwd : cwd + "/" : "";
     const fileActions = allActions.filter(
       (a) => a.type === "tool_use" && a.filePath && a.tool !== "Bash"
     );
-    const recent = fileActions.slice(-20);
-    if (recent.length === 0) return;
-    const cwdPrefix = cwd ? cwd.endsWith("/") ? cwd : cwd + "/" : "";
+    const recent = fileActions.slice(-40);
+    if (recent.length === 0) {
+      agentPath = [];
+      nodeActions = {};
+      return;
+    }
+    agentPath = [];
+    nodeActions = {};
     for (let i = 0; i < recent.length; i++) {
       const action = recent[i];
-      let filePath = action.filePath;
-      if (cwdPrefix && filePath.startsWith(cwdPrefix)) {
-        filePath = filePath.slice(cwdPrefix.length);
-      }
-      let target = null;
-      if (graph.hasNode(filePath)) {
-        target = filePath;
-      } else {
-        if (graph.hasNode("./" + filePath)) {
-          target = "./" + filePath;
-        } else {
-          const basename = filePath.split("/").pop();
-          graph.forEachNode((node) => {
-            if (!target && (node.endsWith("/" + basename) || node === basename)) {
-              target = node;
-            }
-          });
-        }
-      }
+      const target = resolveNode(graph, action.filePath, cwdPrefix);
       if (!target) continue;
+      const entry = {
+        node: target,
+        tool: action.tool,
+        timestamp: action.timestamp,
+        oldString: action.oldString || null,
+        newString: action.newString || null,
+        index: i
+      };
+      agentPath.push(entry);
+      if (!nodeActions[target]) nodeActions[target] = [];
+      nodeActions[target].push(entry);
       const recency = (i + 1) / recent.length;
       const heat = 0.15 + recency * 0.85;
       const currentHeat = graph.getNodeAttribute(target, "heat") || 0;
@@ -10390,10 +10444,192 @@ void main() {
       }
       const parent = target.split("/").slice(0, -1).join("/");
       if (parent && graph.hasNode(parent)) {
-        const parentHeat = graph.getNodeAttribute(parent, "heat") || 0;
-        graph.setNodeAttribute(parent, "heat", Math.max(parentHeat, heat * 0.4));
+        graph.setNodeAttribute(parent, "heat", Math.max(
+          graph.getNodeAttribute(parent, "heat") || 0,
+          heat * 0.4
+        ));
       }
     }
+    let prevNode = null;
+    for (const step of agentPath) {
+      if (prevNode && prevNode !== step.node && graph.hasNode(prevNode) && graph.hasNode(step.node)) {
+        const edgeId = `path-${prevNode}-${step.node}-${step.index}`;
+        if (!graph.hasEdge(edgeId)) {
+          try {
+            graph.addEdgeWithKey(edgeId, prevNode, step.node, {
+              color: "#00cccc80",
+              size: 1.5,
+              isPathEdge: true,
+              zIndex: 10
+            });
+          } catch {
+          }
+        }
+      }
+      prevNode = step.node;
+    }
   }
-  window.FileGraph = { buildFileGraph, initSigma, applyActivity };
+  var TOOL_COLORS = {
+    Read: { bg: "#0a1a1a", border: "#008888", text: "#00cccc", label: "READ" },
+    Edit: { bg: "#1a1a0a", border: "#aa7500", text: "#ffb000", label: "EDIT" },
+    Write: { bg: "#1a0a1a", border: "#8844aa", text: "#bb66dd", label: "WRITE" },
+    Grep: { bg: "#0a1a0a", border: "#00aa2a", text: "#00ff41", label: "GREP" },
+    Glob: { bg: "#0a1a0a", border: "#00aa2a", text: "#00ff41", label: "GLOB" }
+  };
+  function getToolStyle(tool) {
+    return TOOL_COLORS[tool] || { bg: "#0d0d0d", border: "#333", text: "#666", label: tool };
+  }
+  function setupNodeClick(sigma, graph, container) {
+    function showNodePopup(node) {
+      const actions = nodeActions[node];
+      if (!actions || actions.length === 0) return;
+      const old = document.getElementById("node-popup-overlay");
+      if (old) old.remove();
+      const overlay = document.createElement("div");
+      overlay.id = "node-popup-overlay";
+      overlay.style.cssText = `
+      position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 200;
+      display: flex; justify-content: center; align-items: flex-start; padding: 40px 30px 30px;
+    `;
+      const modal = document.createElement("div");
+      modal.style.cssText = `
+      background: #0a0a0a; border: 1px solid #222; width: 700px; max-width: 95vw;
+      max-height: 85vh; display: flex; flex-direction: column; overflow: hidden;
+      font-family: 'Share Tech Mono', monospace; font-size: 12px; color: #888;
+    `;
+      const label = node.split("/").pop();
+      let html = "";
+      html += `<div style="padding:12px 16px;border-bottom:1px solid #161616;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+      <div>
+        <span style="color:#e0e0e0;font-size:14px;font-weight:500;">${esc(label)}</span>
+        <span style="color:#333;font-size:10px;margin-left:8px;">${esc(node)}</span>
+      </div>
+      <span id="node-popup-close" style="cursor:pointer;color:#444;padding:4px 10px;border:1px solid #222;font-size:11px;">ESC</span>
+    </div>`;
+      html += `<div style="padding:8px 16px;border-bottom:1px solid #111;display:flex;gap:12px;flex-shrink:0;">
+      <span style="font-size:9px;color:#333;letter-spacing:1px;">LEGEND:</span>
+      <span style="font-size:9px;color:${TOOL_COLORS.Read.text};">\u25CF READ</span>
+      <span style="font-size:9px;color:${TOOL_COLORS.Edit.text};">\u25CF EDIT</span>
+      <span style="font-size:9px;color:${TOOL_COLORS.Write.text};">\u25CF WRITE</span>
+      <span style="font-size:9px;color:${TOOL_COLORS.Grep.text};">\u25CF GREP</span>
+    </div>`;
+      html += `<div style="padding:10px 16px;border-bottom:1px solid #111;flex-shrink:0;">
+      <div style="font-size:9px;color:#333;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;">AGENT PATH \u2014 ${agentPath.length} steps</div>
+      <div style="display:flex;flex-wrap:wrap;gap:2px;max-height:80px;overflow-y:auto;">`;
+      for (let pi = 0; pi < agentPath.length; pi++) {
+        const step = agentPath[pi];
+        const isThis = step.node === node;
+        const name = step.node.split("/").pop();
+        const ts = getToolStyle(step.tool);
+        const bg = isThis ? ts.bg : "#0a0a0a";
+        const color = isThis ? "#ffffff" : ts.text;
+        const border = isThis ? `2px solid ${ts.border}` : `1px solid #1a1a1a`;
+        const opacity = isThis ? "1" : "0.7";
+        html += `<span class="timeline-node" data-node="${esc(step.node)}" style="
+        padding:2px 6px;font-size:9px;color:${color};background:${bg};border:${border};
+        cursor:pointer;opacity:${opacity};display:inline-flex;align-items:center;gap:3px;
+      ">`;
+        html += `<span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:${ts.text};"></span>`;
+        html += `${esc(name)}`;
+        if (pi < agentPath.length - 1) html += `</span><span style="color:#222;font-size:8px;">\u2192</span>`;
+        else html += `</span>`;
+      }
+      html += `</div></div>`;
+      html += `<div style="flex:1;overflow-y:auto;padding:12px 16px;">
+      <div style="font-size:9px;color:#333;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">ACTIONS ON THIS FILE \u2014 ${actions.length} operations</div>`;
+      for (const a of actions) {
+        const time = a.timestamp ? new Date(a.timestamp).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
+        const ts = getToolStyle(a.tool);
+        html += `<div style="padding:8px 10px;border-left:3px solid ${ts.border};margin-bottom:6px;background:${ts.bg};">
+        <div style="display:flex;gap:8px;align-items:baseline;margin-bottom:4px;">
+          <span style="font-size:10px;color:${ts.text};text-transform:uppercase;letter-spacing:1px;font-weight:500;">${ts.label}</span>
+          <span style="font-size:9px;color:#2a2a2a;">${time}</span>
+          <span style="font-size:9px;color:#222;">step ${a.index + 1} of ${agentPath.length}</span>
+        </div>`;
+        if (a.tool === "Edit" && (a.oldString || a.newString)) {
+          html += `<div style="margin-top:4px;font-family:'JetBrains Mono','Share Tech Mono',monospace;">`;
+          if (a.oldString) {
+            html += `<div style="background:#1a0808;padding:6px 10px;font-size:11px;color:#cc6666;white-space:pre-wrap;word-break:break-all;max-height:120px;overflow-y:auto;border-left:2px solid #662222;margin-bottom:2px;">- ${esc(a.oldString)}</div>`;
+          }
+          if (a.newString) {
+            html += `<div style="background:#081a08;padding:6px 10px;font-size:11px;color:#66cc66;white-space:pre-wrap;word-break:break-all;max-height:120px;overflow-y:auto;border-left:2px solid #226622;">+ ${esc(a.newString)}</div>`;
+          }
+          html += `</div>`;
+        } else if (a.tool === "Write" && a.newString) {
+          html += `<div style="margin-top:4px;font-family:'JetBrains Mono','Share Tech Mono',monospace;">
+          <div style="background:#081a08;padding:6px 10px;font-size:11px;color:#66cc66;white-space:pre-wrap;word-break:break-all;max-height:150px;overflow-y:auto;border-left:2px solid #226622;">+ ${esc(a.newString)}</div>
+        </div>`;
+        } else if (a.tool === "Write") {
+          html += `<div style="font-size:10px;color:#666;margin-top:2px;">new file created</div>`;
+        } else if (a.tool === "Read") {
+          html += `<div style="font-size:10px;color:#666;margin-top:2px;">file contents read into context</div>`;
+        } else if (a.tool === "Grep") {
+          html += `<div style="font-size:10px;color:#666;margin-top:2px;">searched file contents</div>`;
+        }
+        html += `</div>`;
+      }
+      html += `</div>`;
+      modal.innerHTML = html;
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+      const uniqueNodes = [];
+      const seenNav = /* @__PURE__ */ new Set();
+      for (const step of agentPath) {
+        if (!seenNav.has(step.node) && nodeActions[step.node]) {
+          seenNav.add(step.node);
+          uniqueNodes.push(step.node);
+        }
+      }
+      const currentIdx = uniqueNodes.indexOf(node);
+      function cleanup() {
+        overlay.remove();
+        document.removeEventListener("keydown", keyHandler);
+      }
+      function keyHandler(e) {
+        if (e.key === "Escape") {
+          cleanup();
+          return;
+        }
+        if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+          e.preventDefault();
+          const next = uniqueNodes[currentIdx + 1];
+          if (next) {
+            cleanup();
+            showNodePopup(next);
+          }
+        }
+        if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+          e.preventDefault();
+          const prev = uniqueNodes[currentIdx - 1];
+          if (prev) {
+            cleanup();
+            showNodePopup(prev);
+          }
+        }
+      }
+      document.addEventListener("keydown", keyHandler);
+      document.getElementById("node-popup-close").addEventListener("click", cleanup);
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) cleanup();
+      });
+      overlay.querySelectorAll(".timeline-node").forEach((el) => {
+        el.addEventListener("click", () => {
+          const targetNode = el.dataset.node;
+          if (nodeActions[targetNode]) {
+            cleanup();
+            showNodePopup(targetNode);
+          }
+        });
+      });
+    }
+    sigma.on("clickNode", ({ node }) => showNodePopup(node));
+    sigma.on("clickStage", () => {
+      const overlay = document.getElementById("node-popup-overlay");
+      if (overlay) overlay.remove();
+    });
+  }
+  function esc(s) {
+    return s ? s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") : "";
+  }
+  window.FileGraph = { buildFileGraph, initSigma, applyActivity, setupNodeClick };
 })();
