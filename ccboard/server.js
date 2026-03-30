@@ -14,7 +14,9 @@ const CLAUDE_DIR = join(homedir(), ".claude");
 const SESSIONS_DIR = join(CLAUDE_DIR, "sessions");
 const PROJECTS_DIR = join(CLAUDE_DIR, "projects");
 
-// Cache: PID → resolved JSONL path (locked on first resolution, never re-resolved)
+// Cache: PID → resolved JSONL path
+// Only caches exact sessionId matches — fallback resolutions are not cached
+// because they may pick up the wrong file (e.g. supervisor JSONL)
 const jsonlPathCache = new Map();
 
 // Encode a cwd path to the project directory name Claude uses
@@ -369,12 +371,67 @@ async function resolveJsonlPath(cwd, sessionId) {
   }
 }
 
-// Resolve and cache JSONL path for a PID — once locked, never changes
+// Find the largest JSONL in a project directory (most likely the main agent conversation)
+async function findLargestJsonl(projectDir) {
+  const dirPath = join(PROJECTS_DIR, projectDir);
+  let files;
+  try {
+    files = await readdir(dirPath);
+  } catch {
+    return null;
+  }
+  const jsonls = files.filter((f) => f.endsWith(".jsonl"));
+  if (jsonls.length === 0) return null;
+
+  const supIds = await getSupervisorSessionIds();
+
+  let largest = null;
+  let largestSize = 0;
+  for (const f of jsonls) {
+    const sessionId = f.replace(".jsonl", "");
+    if (supIds.has(sessionId)) continue;
+    try {
+      const info = await stat(join(dirPath, f));
+      if (info.size > largestSize) {
+        largestSize = info.size;
+        largest = f;
+      }
+    } catch {}
+  }
+  return largest ? join(dirPath, largest) : null;
+}
+
+// Resolve and cache JSONL path for a PID
 async function resolveJsonlForPid(pid, cwd, sessionId) {
   if (jsonlPathCache.has(pid)) return jsonlPathCache.get(pid);
-  const resolved = await resolveJsonlPath(cwd, sessionId);
-  if (resolved) jsonlPathCache.set(pid, resolved);
-  return resolved;
+
+  const projectDir = cwdToProjectDir(cwd);
+
+  // 1. Try exact sessionId match
+  const exactPath = join(PROJECTS_DIR, projectDir, `${sessionId}.jsonl`);
+  try {
+    await stat(exactPath);
+    jsonlPathCache.set(pid, exactPath);
+    return exactPath;
+  } catch {}
+
+  // 2. Check .ccboard/session.json for the stored agent sessionId
+  try {
+    const pairing = await readSessionPairing(cwd);
+    if (pairing?.agentSessionId) {
+      const pairingPath = join(PROJECTS_DIR, projectDir, `${pairing.agentSessionId}.jsonl`);
+      await stat(pairingPath);
+      jsonlPathCache.set(pid, pairingPath);
+      return pairingPath;
+    }
+  } catch {}
+
+  // 3. Fallback: largest JSONL (excluding supervisors)
+  const largest = await findLargestJsonl(projectDir);
+  if (largest) return largest;
+
+  // 4. Last resort
+  return await findLatestJsonl(projectDir);
 }
 
 // Read full JSONL and parse into structured conversation data
@@ -584,6 +641,23 @@ app.get("/api/sessions", async (_req, res) => {
   res.json(sessions);
 });
 
+// Session file tree (for graph visualization)
+app.get("/api/sessions/:pid/files", async (req, res) => {
+  const sessions = await getSessions();
+  const session = sessions.find((s) => s.pid === Number(req.params.pid));
+  if (!session) return res.status(404).json({ error: "session not found" });
+
+  try {
+    const output = execSync(
+      "git ls-files 2>/dev/null || find . -type f -not -path '*/node_modules/*' -not -path '*/.git/*' | head -500",
+      { cwd: session.cwd, encoding: "utf-8", timeout: 5000 }
+    ).trim();
+    res.json(output.split("\n").filter((f) => f.trim()));
+  } catch {
+    res.json([]);
+  }
+});
+
 // Session detail: all actions grouped by turn
 app.get("/api/sessions/:pid/actions", async (req, res) => {
   const sessions = await getSessions();
@@ -687,36 +761,178 @@ function findTmuxSessionForPid(pid) {
 
 app.use(express.json());
 
-// Launch a new Claude Code session in a tmux session
-app.post("/api/launch", (req, res) => {
+// Read the .ccboard/session.json pairing file for a project
+async function readSessionPairing(cwd) {
+  try {
+    const raw = await readFile(join(cwd, ".ccboard", "session.json"), "utf-8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+// Write the .ccboard/session.json pairing file
+async function writeSessionPairing(cwd, pairing) {
+  const { writeFileSync, mkdirSync } = await import("fs");
+  const dir = join(cwd, ".ccboard");
+  try { mkdirSync(dir, { recursive: true }); } catch {}
+  writeFileSync(join(dir, "session.json"), JSON.stringify(pairing, null, 2));
+}
+
+// Launch a new Claude Code session + supervisor in tmux
+app.post("/api/launch", async (req, res) => {
   const { cwd, resume, sessionId, name } = req.body;
   if (!cwd) return res.status(400).json({ error: "cwd required" });
 
-  // Generate a session name
   const dirName = cwd.split("/").pop() || "session";
-  const idx = getManagedTmuxSessions().length;
-  const tmuxName = `${TMUX_PREFIX}-${idx}-${dirName}`
+  const agentTmux = `${TMUX_PREFIX}-${dirName}`
+    .replace(/[^a-zA-Z0-9_-]/g, "-")
+    .slice(0, 40);
+  const supTmux = `${TMUX_PREFIX}-sup-${dirName}`
     .replace(/[^a-zA-Z0-9_-]/g, "-")
     .slice(0, 40);
 
-  // Build the claude command
-  let claudeCmd = "claude --dangerously-skip-permissions --model sonnet";
-  if (resume && sessionId) {
-    claudeCmd += ` --resume ${sessionId}`;
-  } else if (resume) {
-    claudeCmd += " --continue";
-  }
-  if (name) {
-    claudeCmd += ` --name ${JSON.stringify(name)}`;
-  }
-
   try {
-    // Create a detached tmux session running claude in the given directory
+    // Kill existing if names collide
+    try { execSync(`tmux kill-session -t ${agentTmux} 2>/dev/null`); } catch {}
+    try { execSync(`tmux kill-session -t ${supTmux} 2>/dev/null`); } catch {}
+
+    // Check for existing pairing (for resume)
+    const pairing = await readSessionPairing(cwd);
+
+    // Build agent command
+    let agentCmd = "claude --dangerously-skip-permissions --model sonnet";
+    if (resume && sessionId) {
+      agentCmd += ` --resume ${sessionId}`;
+    } else if (resume && pairing?.agentSessionId) {
+      agentCmd += ` --resume ${pairing.agentSessionId}`;
+    } else if (resume) {
+      agentCmd += " --continue";
+    }
+    if (name) {
+      agentCmd += ` --name ${JSON.stringify(name)}`;
+    }
+
+    // Launch agent
     execSync(
-      `tmux new-session -d -s ${tmuxName} -c ${JSON.stringify(cwd)} ${JSON.stringify(claudeCmd)}`,
+      `tmux new-session -d -s ${agentTmux} -c ${JSON.stringify(cwd)} ${JSON.stringify(agentCmd)}`,
       { timeout: 5000 }
     );
-    res.json({ ok: true, tmuxSession: tmuxName });
+
+    // Build supervisor command
+    const systemPrompt = buildSupervisorSystemPrompt(agentTmux).replace(/"/g, '\\"');
+    let supCmd = `claude --dangerously-skip-permissions --model sonnet --system-prompt "${systemPrompt}"`;
+    if (resume && pairing?.supervisorSessionId) {
+      supCmd += ` --resume ${pairing.supervisorSessionId}`;
+    }
+
+    // Launch supervisor
+    execSync(
+      `tmux new-session -d -s ${supTmux} -c ${JSON.stringify(cwd)} ${JSON.stringify(supCmd)}`,
+      { timeout: 5000 }
+    );
+
+    // Wait for both to register, then save pairing
+    setTimeout(async () => {
+      try {
+        // Read agent's sessionId from its session file
+        const agentPanePid = execSync(
+          `tmux list-panes -t ${agentTmux} -F "#{pane_pid}" 2>/dev/null`,
+          { encoding: "utf-8" }
+        ).trim();
+        const supPanePid = execSync(
+          `tmux list-panes -t ${supTmux} -F "#{pane_pid}" 2>/dev/null`,
+          { encoding: "utf-8" }
+        ).trim();
+
+        let agentSid = sessionId; // If resuming, we already know it
+        try {
+          const raw = await readFile(join(SESSIONS_DIR, `${agentPanePid}.json`), "utf-8");
+          const data = JSON.parse(raw);
+          // For new sessions, use the new sessionId. For resumed, keep the original.
+          if (!resume) agentSid = data.sessionId;
+        } catch {}
+
+        let supSid = null;
+        try {
+          const raw = await readFile(join(SESSIONS_DIR, `${supPanePid}.json`), "utf-8");
+          supSid = JSON.parse(raw).sessionId;
+        } catch {}
+
+        // Use the original IDs if resuming (the JSONL filenames don't change)
+        const finalAgentSid = resume && pairing?.agentSessionId ? pairing.agentSessionId : agentSid;
+        const finalSupSid = resume && pairing?.supervisorSessionId ? pairing.supervisorSessionId : supSid;
+
+        if (finalAgentSid || finalSupSid) {
+          await writeSessionPairing(cwd, {
+            agentSessionId: finalAgentSid || null,
+            supervisorSessionId: finalSupSid || null,
+            agentTmux,
+            supTmux,
+            cwd,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      } catch {}
+    }, 8000);
+
+    // Send initial context to supervisor once ready
+    const contextMsg = `You are now supervising the "${dirName}" session (${cwd}).
+The agent is running in tmux session: ${agentTmux}
+Run: mkdir -p .ccboard && (grep -q '.ccboard/' .gitignore 2>/dev/null || echo '.ccboard/' >> .gitignore)
+Then introduce yourself and tell me what you see in this project. Read the recent git log and any CLAUDE.md or README.`;
+
+    let attempts = 0;
+    const sendInitial = async () => {
+      attempts++;
+      if (attempts > 20) return;
+      if (!isTmuxPaneWaiting(supTmux)) {
+        setTimeout(sendInitial, 2000);
+        return;
+      }
+      try {
+        const tmpFile = `/tmp/ccboard-sup-init-${Date.now()}.txt`;
+        const { writeFileSync: ws, unlinkSync: ul } = await import("fs");
+        ws(tmpFile, contextMsg);
+        execSync(`tmux load-buffer ${tmpFile}`);
+        execSync(`tmux paste-buffer -t ${supTmux}`);
+        await new Promise((r) => setTimeout(r, 500));
+        execSync(`tmux send-keys -t ${supTmux} Enter`);
+        ul(tmpFile);
+      } catch {
+        setTimeout(sendInitial, 2000);
+      }
+    };
+    setTimeout(sendInitial, 3000);
+
+    // Register supervisor in the supervisors map (keyed by agent PID once known)
+    setTimeout(async () => {
+      try {
+        const agentPanePid = Number(execSync(
+          `tmux list-panes -t ${agentTmux} -F "#{pane_pid}" 2>/dev/null`,
+          { encoding: "utf-8" }
+        ).trim());
+
+        const pairing = await readSessionPairing(cwd);
+        const agentJsonlId = pairing?.agentSessionId;
+        const projectDir = cwdToProjectDir(cwd);
+        const agentJsonlPath = agentJsonlId
+          ? join(PROJECTS_DIR, projectDir, `${agentJsonlId}.jsonl`)
+          : await findLargestJsonl(projectDir);
+
+        supervisors.set(agentPanePid, {
+          tmuxSession: supTmux,
+          stopped: false,
+          jsonlPath: agentJsonlPath,
+          results: null,
+        });
+
+        // Also cache the agent's JSONL path
+        if (agentJsonlPath) jsonlPathCache.set(agentPanePid, agentJsonlPath);
+      } catch {}
+    }, 10000);
+
+    res.json({ ok: true, agentTmux, supTmux });
   } catch (err) {
     res
       .status(500)
@@ -753,6 +969,7 @@ app.post("/api/sessions/:pid/send", async (req, res) => {
     writeFileSync(tmpFile, message);
     execSync(`tmux load-buffer ${tmpFile}`);
     execSync(`tmux paste-buffer -t ${tmuxSession}`);
+    await new Promise((r) => setTimeout(r, 500));
     execSync(`tmux send-keys -t ${tmuxSession} Enter`);
     unlinkSync(tmpFile);
     res.json({ ok: true });
@@ -1137,7 +1354,8 @@ async function supervisorLoop(primaryPid) {
   sup.timeout = setTimeout(() => supervisorLoop(primaryPid), 30000);
 }
 
-// Start supervisor
+// Start supervisor — if launched via /api/launch, supervisor already exists.
+// This endpoint is for manually starting a supervisor on an existing session.
 app.post("/api/sessions/:pid/supervisor/start", async (req, res) => {
   const pid = Number(req.params.pid);
   if (supervisors.has(pid)) {
@@ -1149,62 +1367,88 @@ app.post("/api/sessions/:pid/supervisor/start", async (req, res) => {
   if (!session) return res.status(404).json({ error: "session not found" });
 
   const primaryJsonlPath = await resolveJsonlForPid(session.pid, session.cwd, session.sessionId);
-  const tmuxName = `${TMUX_PREFIX}-sup-${session.shortName}`
+  const supTmux = `${TMUX_PREFIX}-sup-${session.shortName}`
     .replace(/[^a-zA-Z0-9_-]/g, "-")
     .slice(0, 40);
 
   try {
-    // Kill existing if name collides
-    try { execSync(`tmux kill-session -t ${tmuxName} 2>/dev/null`); } catch {}
+    try { execSync(`tmux kill-session -t ${supTmux} 2>/dev/null`); } catch {}
 
-    // Launch supervisor Claude Code session with system prompt
+    // Check if we should resume a prior supervisor session
+    const pairing = await readSessionPairing(session.cwd);
     const primaryTmux = session.managed ? session.tmuxSession : null;
     const systemPrompt = buildSupervisorSystemPrompt(primaryTmux).replace(/"/g, '\\"');
-    const claudeCmd = `claude --dangerously-skip-permissions --model sonnet --system-prompt "${systemPrompt}"`;
+
+    let supCmd = `claude --dangerously-skip-permissions --model sonnet --system-prompt "${systemPrompt}"`;
+    if (pairing?.supervisorSessionId) {
+      supCmd += ` --resume ${pairing.supervisorSessionId}`;
+    }
+
     execSync(
-      `tmux new-session -d -s ${tmuxName} -c ${JSON.stringify(session.cwd)} ${JSON.stringify(claudeCmd)}`,
+      `tmux new-session -d -s ${supTmux} -c ${JSON.stringify(session.cwd)} ${JSON.stringify(supCmd)}`,
       { timeout: 5000 }
     );
 
     const sup = {
-      tmuxSession: tmuxName,
+      tmuxSession: supTmux,
       stopped: false,
       jsonlPath: primaryJsonlPath,
       results: null,
     };
     supervisors.set(pid, sup);
 
-    // Send an initial context message once Claude is ready
-    const contextMsg = `You are now supervising the "${session.shortName}" session (${session.cwd}).
-${session.managed ? `The agent is running in tmux session: ${session.tmuxSession}` : "The agent is running in a terminal (not managed by ccboard)."}
-Run: mkdir -p .ccboard && echo '.ccboard/' >> .gitignore (if not already there).
+    // If new supervisor (not resumed), send initial context
+    if (!pairing?.supervisorSessionId) {
+      const contextMsg = `You are now supervising the "${session.shortName}" session (${session.cwd}).
+${primaryTmux ? `The agent is running in tmux session: ${primaryTmux}` : "The agent is running in a terminal (not managed by ccboard)."}
+Run: mkdir -p .ccboard && (grep -q '.ccboard/' .gitignore 2>/dev/null || echo '.ccboard/' >> .gitignore)
 Then introduce yourself and tell me what you see in this project. Read the recent git log and any CLAUDE.md or README.`;
 
-    let attempts = 0;
-    const sendInitial = async () => {
-      attempts++;
-      if (attempts > 20 || sup.stopped) return;
-      if (!isTmuxPaneWaiting(tmuxName)) {
-        setTimeout(sendInitial, 2000);
-        return;
-      }
-      try {
-        const tmpFile = `/tmp/ccboard-sup-init-${Date.now()}.txt`;
-        const { writeFileSync, unlinkSync } = await import("fs");
-        writeFileSync(tmpFile, contextMsg);
-        execSync(`tmux load-buffer ${tmpFile}`);
-        execSync(`tmux paste-buffer -t ${tmuxName}`);
-        await new Promise((r) => setTimeout(r, 500));
-        execSync(`tmux send-keys -t ${tmuxName} Enter`);
-        unlinkSync(tmpFile);
-      } catch {
-        setTimeout(sendInitial, 2000);
-        return;
-      }
-    };
-    setTimeout(sendInitial, 3000);
+      let attempts = 0;
+      const sendInitial = async () => {
+        attempts++;
+        if (attempts > 20 || sup.stopped) return;
+        if (!isTmuxPaneWaiting(supTmux)) {
+          setTimeout(sendInitial, 2000);
+          return;
+        }
+        try {
+          const tmpFile = `/tmp/ccboard-sup-init-${Date.now()}.txt`;
+          const { writeFileSync, unlinkSync } = await import("fs");
+          writeFileSync(tmpFile, contextMsg);
+          execSync(`tmux load-buffer ${tmpFile}`);
+          execSync(`tmux paste-buffer -t ${supTmux}`);
+          await new Promise((r) => setTimeout(r, 500));
+          execSync(`tmux send-keys -t ${supTmux} Enter`);
+          unlinkSync(tmpFile);
+        } catch {
+          setTimeout(sendInitial, 2000);
+        }
+      };
+      setTimeout(sendInitial, 3000);
+    }
 
-    res.json({ ok: true, tmuxSession: tmuxName });
+    // Update pairing file with supervisor session ID
+    setTimeout(async () => {
+      try {
+        const supPanePid = execSync(
+          `tmux list-panes -t ${supTmux} -F "#{pane_pid}" 2>/dev/null`,
+          { encoding: "utf-8" }
+        ).trim();
+        const raw = await readFile(join(SESSIONS_DIR, `${supPanePid}.json`), "utf-8");
+        const supSid = JSON.parse(raw).sessionId;
+
+        const existing = await readSessionPairing(session.cwd) || {};
+        await writeSessionPairing(session.cwd, {
+          ...existing,
+          supervisorSessionId: pairing?.supervisorSessionId || supSid,
+          supTmux,
+          updatedAt: new Date().toISOString(),
+        });
+      } catch {}
+    }, 8000);
+
+    res.json({ ok: true, tmuxSession: supTmux });
   } catch (err) {
     res.status(500).json({ error: `failed to start: ${err.message.slice(0, 200)}` });
   }
@@ -1222,10 +1466,76 @@ app.post("/api/sessions/:pid/supervisor/stop", (req, res) => {
   res.json({ ok: true });
 });
 
+// Try to reconnect to an existing supervisor tmux session
+async function reconnectSupervisor(pid, session) {
+  // Check pairing file
+  const pairing = await readSessionPairing(session.cwd);
+  const supTmux = pairing?.supTmux ||
+    `${TMUX_PREFIX}-sup-${session.shortName}`.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 40);
+
+  // Check if the tmux session actually exists
+  try {
+    execSync(`tmux has-session -t ${supTmux} 2>/dev/null`);
+  } catch {
+    return null; // No tmux session — supervisor isn't running
+  }
+
+  // Reconnect: register in the map
+  const primaryJsonlPath = await resolveJsonlForPid(session.pid, session.cwd, session.sessionId);
+  const sup = {
+    tmuxSession: supTmux,
+    stopped: false,
+    jsonlPath: primaryJsonlPath,
+    results: null,
+  };
+  supervisors.set(pid, sup);
+  return sup;
+}
+
+// Resolve the supervisor's JSONL path — handles resumed sessions via pairing file
+async function resolveSupervisorJsonlPath(cwd, tmuxSession) {
+  const projectDir = cwdToProjectDir(cwd);
+
+  // 1. Try pairing file (most reliable for resumed supervisors)
+  try {
+    const pairing = await readSessionPairing(cwd);
+    if (pairing?.supervisorSessionId) {
+      const pairingPath = join(PROJECTS_DIR, projectDir, `${pairing.supervisorSessionId}.jsonl`);
+      await stat(pairingPath);
+      return pairingPath;
+    }
+  } catch {}
+
+  // 2. Try tmux pane PID → session file → JSONL
+  try {
+    const panePid = execSync(
+      `tmux list-panes -t ${tmuxSession} -F "#{pane_pid}" 2>/dev/null`,
+      { encoding: "utf-8" }
+    ).trim();
+    const raw = await readFile(join(SESSIONS_DIR, `${panePid}.json`), "utf-8");
+    const supSessionId = JSON.parse(raw).sessionId;
+    const exactPath = join(PROJECTS_DIR, projectDir, `${supSessionId}.jsonl`);
+    await stat(exactPath);
+    return exactPath;
+  } catch {}
+
+  return null;
+}
+
 // Get supervisor status and results
 app.get("/api/sessions/:pid/supervisor", async (req, res) => {
   const pid = Number(req.params.pid);
-  const sup = supervisors.get(pid);
+  let sup = supervisors.get(pid);
+
+  // If not in memory, try to reconnect to an existing tmux session
+  if (!sup) {
+    const sessions = await getSessions();
+    const session = sessions.find((s) => s.pid === pid);
+    if (session) {
+      sup = await reconnectSupervisor(pid, session);
+    }
+  }
+
   if (!sup) return res.json({ active: false });
 
   const sessions = await getSessions();
@@ -1248,28 +1558,20 @@ app.get("/api/sessions/:pid/supervisor", async (req, res) => {
 // Get supervisor chat messages (from its JSONL)
 app.get("/api/sessions/:pid/supervisor/messages", async (req, res) => {
   const pid = Number(req.params.pid);
-  const sup = supervisors.get(pid);
+  let sup = supervisors.get(pid);
+  if (!sup) {
+    const sessions = await getSessions();
+    const session = sessions.find((s) => s.pid === pid);
+    if (session) sup = await reconnectSupervisor(pid, session);
+  }
   if (!sup) return res.json([]);
 
   const sessions = await getSessions();
   const primary = sessions.find((s) => s.pid === pid);
   if (!primary) return res.json([]);
 
-  // Find the supervisor's JSONL
-  let supSessionId;
-  try {
-    const panePid = execSync(
-      `tmux list-panes -t ${sup.tmuxSession} -F "#{pane_pid}" 2>/dev/null`,
-      { encoding: "utf-8" }
-    ).trim();
-    const raw = await readFile(join(SESSIONS_DIR, `${panePid}.json`), "utf-8");
-    supSessionId = JSON.parse(raw).sessionId;
-  } catch {
-    return res.json([]);
-  }
-
-  const projectDir = cwdToProjectDir(primary.cwd);
-  const jsonlPath = join(PROJECTS_DIR, projectDir, `${supSessionId}.jsonl`);
+  const jsonlPath = await resolveSupervisorJsonlPath(primary.cwd, sup.tmuxSession);
+  if (!jsonlPath) return res.json([]);
 
   let raw;
   try {
@@ -1311,7 +1613,14 @@ app.get("/api/sessions/:pid/supervisor/messages", async (req, res) => {
 // Send a message to the supervisor
 app.post("/api/sessions/:pid/supervisor/send", async (req, res) => {
   const pid = Number(req.params.pid);
-  const sup = supervisors.get(pid);
+  let sup = supervisors.get(pid);
+
+  // Try to reconnect if not in memory
+  if (!sup) {
+    const sessions = await getSessions();
+    const session = sessions.find((s) => s.pid === pid);
+    if (session) sup = await reconnectSupervisor(pid, session);
+  }
   if (!sup) return res.status(404).json({ error: "supervisor not active" });
 
   if (!isTmuxPaneWaiting(sup.tmuxSession)) {
@@ -1363,6 +1672,170 @@ app.get("/api/sessions/:pid/supervisor/reviews", async (req, res) => {
   } catch {}
 
   res.json({ reviews, combined });
+});
+
+// ============================================================
+// Server-Sent Events — real-time JSONL streaming
+// ============================================================
+
+import { watch } from "fs";
+
+// SSE endpoint: streams new JSONL entries as they're written
+app.get("/api/sessions/:pid/stream", async (req, res) => {
+  const pid = Number(req.params.pid);
+  const sessions = await getSessions();
+  const session = sessions.find((s) => s.pid === pid);
+  if (!session) return res.status(404).json({ error: "session not found" });
+
+  const jsonlPath = await resolveJsonlForPid(session.pid, session.cwd, session.sessionId);
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  res.write("data: {\"type\":\"connected\"}\n\n");
+
+  // Track file size to only send new content
+  let lastSize = 0;
+  try {
+    const info = await stat(jsonlPath);
+    lastSize = info.size;
+  } catch {}
+
+  // Send new entries when file changes
+  async function sendNewEntries() {
+    try {
+      const info = await stat(jsonlPath);
+      if (info.size <= lastSize) return;
+
+      const fh = await open(jsonlPath, "r");
+      const buf = Buffer.alloc(info.size - lastSize);
+      await fh.read(buf, 0, buf.length, lastSize);
+      await fh.close();
+      lastSize = info.size;
+
+      const lines = buf.toString("utf-8").split("\n").filter((l) => l.trim());
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          // Only send human messages and assistant text
+          if (entry.type === "user" && entry.promptId && !entry.sourceToolAssistantUUID) {
+            const text = typeof entry.message?.content === "string"
+              ? entry.message.content
+              : "";
+            if (text.trim() && !text.includes("pair-programming supervisor")) {
+              res.write(`data: ${JSON.stringify({ type: "message", role: "human", text: text.slice(0, 5000), timestamp: entry.timestamp })}\n\n`);
+            }
+          }
+          if (entry.type === "assistant") {
+            const content = entry.message?.content;
+            if (Array.isArray(content)) {
+              const textParts = content.filter((c) => c.type === "text" && c.text?.trim()).map((c) => c.text);
+              if (textParts.length > 0) {
+                res.write(`data: ${JSON.stringify({ type: "message", role: "assistant", text: textParts.join("\n").slice(0, 5000), timestamp: entry.timestamp })}\n\n`);
+              }
+            }
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+
+  // Watch the file
+  let watcher;
+  if (jsonlPath) {
+    try {
+      watcher = watch(jsonlPath, () => sendNewEntries());
+    } catch {}
+  }
+
+  // Cleanup on disconnect
+  req.on("close", () => {
+    if (watcher) watcher.close();
+  });
+});
+
+// SSE for supervisor chat
+app.get("/api/sessions/:pid/supervisor/stream", async (req, res) => {
+  const pid = Number(req.params.pid);
+  let sup = supervisors.get(pid);
+  if (!sup) {
+    const sessions = await getSessions();
+    const session = sessions.find((s) => s.pid === pid);
+    if (session) sup = await reconnectSupervisor(pid, session);
+  }
+
+  const sessions = await getSessions();
+  const session = sessions.find((s) => s.pid === pid);
+  if (!session || !sup) return res.status(404).json({ error: "not found" });
+
+  const supJsonlPath = await resolveSupervisorJsonlPath(session.cwd, sup.tmuxSession);
+  if (!supJsonlPath) return res.status(404).json({ error: "supervisor JSONL not found" });
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  res.write("data: {\"type\":\"connected\"}\n\n");
+
+  let lastSize = 0;
+  try {
+    const info = await stat(supJsonlPath);
+    lastSize = info.size;
+  } catch {}
+
+  async function sendNewEntries() {
+    try {
+      const info = await stat(supJsonlPath);
+      if (info.size <= lastSize) return;
+
+      const fh = await open(supJsonlPath, "r");
+      const buf = Buffer.alloc(info.size - lastSize);
+      await fh.read(buf, 0, buf.length, lastSize);
+      await fh.close();
+      lastSize = info.size;
+
+      const lines = buf.toString("utf-8").split("\n").filter((l) => l.trim());
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry.type === "user" && entry.promptId && !entry.sourceToolAssistantUUID) {
+            const text = typeof entry.message?.content === "string" ? entry.message.content : "";
+            if (text.trim()) {
+              res.write(`data: ${JSON.stringify({ type: "message", role: "human", text: text.slice(0, 5000), timestamp: entry.timestamp })}\n\n`);
+            }
+          }
+          if (entry.type === "assistant") {
+            const content = entry.message?.content;
+            if (Array.isArray(content)) {
+              const textParts = content.filter((c) => c.type === "text" && c.text?.trim()).map((c) => c.text);
+              if (textParts.length > 0) {
+                res.write(`data: ${JSON.stringify({ type: "message", role: "assistant", text: textParts.join("\n").slice(0, 5000), timestamp: entry.timestamp })}\n\n`);
+              }
+            }
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+
+  // Also send status updates (waiting/thinking)
+  const statusInterval = setInterval(() => {
+    const isWaiting = isTmuxPaneWaiting(sup.tmuxSession);
+    res.write(`data: ${JSON.stringify({ type: "status", isWaiting })}\n\n`);
+  }, 2000);
+
+  let watcher;
+  try {
+    watcher = watch(supJsonlPath, () => sendNewEntries());
+  } catch {}
+
+  req.on("close", () => {
+    if (watcher) watcher.close();
+    clearInterval(statusInterval);
+  });
 });
 
 // Serve static files

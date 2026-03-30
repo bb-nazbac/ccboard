@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Graph Test</title>
+  <style>
+    body { margin: 0; background: #0a0a0a; }
+    #container { width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="container"></div>
+  <div id="debug" style="position:fixed;top:10px;left:10px;color:#0f0;font-family:monospace;font-size:12px;z-index:999"></div>
+  <script src="/file-graph.bundle.js"></script>
+  <script>
+    const dbg = document.getElementById("debug");
+    try {
+      dbg.textContent = "FileGraph loaded: " + !!window.FileGraph;
+    } catch(e) {
+      dbg.textContent = "Error: " + e.message;
+    }
+
+    // Test with fake file list
+    const files = [
+      "src/index.ts",
+      "src/auth/login.ts",
+      "src/auth/session.ts",
+      "src/db/users.ts",
+      "src/db/posts.ts",
+      "src/routes/api.ts",
+      "src/routes/auth.ts",
+      "src/utils/helpers.ts",
+      "package.json",
+      "README.md",
+    ];
+
+    try {
+      dbg.textContent += " | Building graph...";
+      const graph = window.FileGraph.buildFileGraph(files);
+      dbg.textContent += " | Nodes: " + graph.order + " Edges: " + graph.size;
+
+      const container = document.getElementById("container");
+      dbg.textContent += " | Container: " + container.offsetWidth + "x" + container.offsetHeight;
+
+      const sigma = window.FileGraph.initSigma(container, graph);
+      dbg.textContent += " | Sigma OK";
+
+      setTimeout(() => {
+        sigma.getCamera().animatedReset({ duration: 300 });
+        dbg.textContent += " | Camera reset";
+      }, 500);
+
+      setTimeout(() => {
+        window.FileGraph.applyActivity(graph, [
+          { type: "tool_use", tool: "Read", filePath: "src/auth/login.ts" },
+          { type: "tool_use", tool: "Edit", filePath: "src/db/users.ts" },
+        ]);
+        sigma.refresh();
+        dbg.textContent += " | Activity applied";
+      }, 2000);
+    } catch(e) {
+      dbg.textContent += " | ERROR: " + e.message;
+      console.error(e);
+    }
+  </script>
+</body>
+</html>

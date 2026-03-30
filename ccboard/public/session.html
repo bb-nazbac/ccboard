@@ -4,8 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ccboard — session</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark-dimmed.min.css" />
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
     :root {
       --green: #00ff41;
@@ -126,11 +127,34 @@
     /* Three-pane layout */
     .panes {
       flex: 1;
-      display: grid;
-      grid-template-columns: 280px 1fr 340px;
-      gap: 1px;
+      display: flex;
+      gap: 0;
       min-height: 0;
     }
+
+    .pane-left { width: 280px; flex-shrink: 0; }
+    .pane-center { flex: 1; min-width: 200px; }
+    .pane-right { width: 340px; flex-shrink: 0; }
+
+    /* Drag handles between panes */
+    .pane-resize {
+      width: 4px;
+      cursor: col-resize;
+      background: #0a0a0a;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+    .pane-resize:hover, .pane-resize.active { background: var(--green-faint); }
+
+    /* Vertical resize handle between graph and reviews */
+    .pane-resize-v {
+      height: 4px;
+      cursor: row-resize;
+      background: #0a0a0a;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+    .pane-resize-v:hover, .pane-resize-v.active { background: var(--green-faint); }
 
     .pane {
       display: flex;
@@ -314,7 +338,142 @@
     .message.assistant .message-role { color: var(--green-dim); }
     .message-time { font-size: 8px; color: #2a2a2a; }
 
-    .message-text { font-size: 11px; color: var(--text); white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
+    /* Rich markdown rendering */
+    .message-text {
+      font-size: 12px;
+      color: #c0c0c0;
+      line-height: 1.5;
+      font-family: 'Inter', -apple-system, sans-serif;
+      word-break: break-word;
+    }
+
+    .message-text p { margin: 0 0 8px; }
+    .message-text p:last-child { margin-bottom: 0; }
+
+    .message-text h1, .message-text h2, .message-text h3 {
+      font-family: 'Inter', sans-serif;
+      color: var(--text-bright);
+      margin: 12px 0 6px;
+      font-weight: 600;
+    }
+    .message-text h1 { font-size: 15px; }
+    .message-text h2 { font-size: 13px; }
+    .message-text h3 { font-size: 12px; color: var(--text); }
+
+    .message-text strong { color: var(--text-bright); font-weight: 600; }
+    .message-text em { color: var(--text); font-style: italic; }
+
+    .message-text a { color: var(--cyan-dim); text-decoration: none; }
+    .message-text a:hover { text-decoration: underline; }
+
+    .message-text ul, .message-text ol {
+      margin: 4px 0 8px 16px;
+      padding: 0;
+    }
+    .message-text li { margin-bottom: 2px; }
+
+    /* Inline code */
+    .message-text code {
+      font-family: 'JetBrains Mono', 'Share Tech Mono', monospace;
+      font-size: 11px;
+      background: #1a1a2a;
+      color: #e06c75;
+      padding: 1px 5px;
+      border-radius: 3px;
+      border: 1px solid #222;
+    }
+
+    /* Code blocks */
+    .message-text pre {
+      margin: 6px 0;
+      border-radius: 4px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .message-text pre code {
+      display: block;
+      padding: 10px 12px;
+      font-size: 11px;
+      line-height: 1.5;
+      background: #0d1117;
+      color: #c9d1d9;
+      border: 1px solid #1a1a2a;
+      border-radius: 4px;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    .message-text pre code::-webkit-scrollbar { height: 4px; }
+    .message-text pre code::-webkit-scrollbar-thumb { background: #222; }
+
+    /* Code block language label */
+    .code-block-wrapper {
+      position: relative;
+    }
+
+    .code-lang {
+      position: absolute;
+      top: 0;
+      right: 0;
+      font-size: 9px;
+      color: #444;
+      padding: 2px 8px;
+      font-family: 'Inter', sans-serif;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    .code-copy {
+      position: absolute;
+      top: 0;
+      right: 50px;
+      font-size: 9px;
+      color: #333;
+      padding: 2px 8px;
+      cursor: pointer;
+      font-family: 'Inter', sans-serif;
+    }
+    .code-copy:hover { color: var(--text); }
+
+    /* Blockquotes */
+    .message-text blockquote {
+      border-left: 2px solid var(--green-faint);
+      margin: 6px 0;
+      padding: 2px 10px;
+      color: var(--text-dim);
+    }
+
+    /* Tables */
+    .message-text table {
+      border-collapse: collapse;
+      margin: 6px 0;
+      font-size: 11px;
+      width: 100%;
+    }
+    .message-text th, .message-text td {
+      border: 1px solid #1a1a1a;
+      padding: 4px 8px;
+      text-align: left;
+    }
+    .message-text th {
+      background: #111;
+      color: var(--text-bright);
+      font-weight: 500;
+    }
+
+    /* HR */
+    .message-text hr {
+      border: none;
+      border-top: 1px solid #1a1a1a;
+      margin: 8px 0;
+    }
+
+    /* Human messages stay simpler */
+    .message.human .message-text {
+      font-family: 'Inter', sans-serif;
+      color: var(--text-bright);
+    }
 
     .send-area { flex-shrink: 0; padding: 6px; border-top: 1px solid #111; }
     .send-bar { display: flex; gap: 4px; }
@@ -424,23 +583,22 @@
     </div>
     <div class="token-bar"><div class="token-bar-fill ok" id="token-fill" style="width:0%"></div></div>
 
-    <!-- Three panes -->
+    <!-- Three panes with resize handles -->
     <div class="panes">
       <!-- LEFT: Supervisor Chat -->
-      <div class="pane" id="pane-supervisor">
+      <div class="pane pane-left" id="pane-supervisor">
         <div class="pane-header">
           <span>Supervisor</span>
+          <span id="sup-tmux-cmd" class="sup-tmux"></span>
           <span id="sup-status-text" class="sup-reviewed-at"></span>
         </div>
         <div class="pane-scroll" id="sup-chat-scroll">
           <div class="pane-spacer"></div>
           <div id="sup-chat-content">
-            <div class="sup-empty" id="sup-empty-state">
-              <button class="sup-btn" id="sup-start">START SUPERVISOR</button>
-            </div>
+            <div class="sup-empty">loading supervisor<span class="cursor"></span></div>
           </div>
         </div>
-        <div class="send-area" id="sup-send-area" style="display:none">
+        <div class="send-area" id="sup-send-area">
           <div class="send-bar">
             <input type="text" class="send-input" id="sup-input" placeholder="Talk to supervisor..." />
             <button class="send-btn" id="sup-send-btn">SEND</button>
@@ -449,16 +607,19 @@
         </div>
       </div>
 
-      <!-- CENTER: Actions (top) + Reviews (bottom) -->
-      <div class="pane pane-split">
-        <div class="pane-half">
-          <div class="pane-header">Actions</div>
-          <div class="pane-scroll" id="actions-scroll">
-            <div class="pane-spacer"></div>
-            <div class="sup-empty">loading<span class="cursor"></span></div>
+      <div class="pane-resize" id="resize-left"></div>
+
+      <!-- CENTER: Agent Trace (top) + Reviews (bottom) -->
+      <div class="pane pane-center pane-split">
+        <div class="pane-half" id="pane-graph-half">
+          <div class="pane-header">
+            <span>Agent Trace</span>
+            <span class="sup-reviewed-at" id="graph-status"></span>
           </div>
+          <div id="graph-container" style="flex:1;min-height:0;position:relative;background:#050505;"></div>
         </div>
-        <div class="pane-half" style="border-top:1px solid #161616;">
+        <div class="pane-resize-v" id="resize-center-v"></div>
+        <div class="pane-half" id="pane-reviews-half">
           <div class="pane-header">
             <span>Reviews</span>
             <span class="sup-reviewed-at" id="review-timestamp"></span>
@@ -471,9 +632,14 @@
         </div>
       </div>
 
+      <div class="pane-resize" id="resize-right"></div>
+
       <!-- RIGHT: Agent Messages -->
-      <div class="pane">
-        <div class="pane-header">Agent Chat</div>
+      <div class="pane pane-right" id="pane-messages">
+        <div class="pane-header">
+          <span>Agent Chat</span>
+          <span id="agent-tmux-cmd" class="sup-tmux"></span>
+        </div>
         <div class="pane-scroll" id="messages-scroll">
           <div class="pane-spacer"></div>
           <div class="sup-empty">loading<span class="cursor"></span></div>
@@ -494,6 +660,9 @@
     </div>
   </div>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/15.0.7/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+  <script src="/file-graph.bundle.js"></script>
   <script>
     const pid = window.location.pathname.split('/').pop();
     const MAX_CONTEXT = 1000000;
@@ -501,6 +670,29 @@
     function escapeHtml(s) { return s ? s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') : ''; }
     function formatTime(ts) { return ts ? new Date(ts).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) : ''; }
     function formatTokens(n) { return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':String(n); }
+
+    // Configure marked for markdown rendering
+    marked.setOptions({
+      highlight: function(code, lang) {
+        if (lang && hljs.getLanguage(lang)) {
+          return hljs.highlight(code, { language: lang }).value;
+        }
+        return hljs.highlightAuto(code).value;
+      },
+      breaks: true,
+      gfm: true,
+    });
+
+    // Render markdown with code block wrappers
+    function renderMarkdown(text) {
+      if (!text) return '';
+      let html = marked.parse(text);
+      // Wrap pre>code blocks with language label and copy button
+      html = html.replace(/<pre><code class="language-(\w+)">/g,
+        '<div class="code-block-wrapper"><span class="code-lang">$1</span><pre><code class="language-$1">');
+      html = html.replace(/<\/code><\/pre>/g, '</code></pre></div>');
+      return html;
+    }
 
     // --- Session info ---
     let currentSession = null;
@@ -519,6 +711,17 @@
       badge.textContent = currentSession.status;
       badge.className = 'status-badge ' + currentSession.status;
       document.getElementById('tty-badge').textContent = currentSession.tty;
+
+      // Show agent tmux command if managed
+      const agentTmuxEl = document.getElementById('agent-tmux-cmd');
+      if (currentSession.tmuxSession) {
+        agentTmuxEl.textContent = 'tmux attach -t ' + currentSession.tmuxSession;
+        agentTmuxEl.onclick = () => {
+          navigator.clipboard.writeText('tmux attach -t ' + currentSession.tmuxSession);
+          agentTmuxEl.textContent = 'copied!';
+          setTimeout(() => { agentTmuxEl.textContent = 'tmux attach -t ' + currentSession.tmuxSession; }, 1500);
+        };
+      }
     }
 
     // --- Context ---
@@ -541,51 +744,56 @@
       fill.className = 'token-bar-fill ' + (pct > 80 ? 'crit' : pct > 50 ? 'warn' : 'ok');
     }
 
-    // --- Actions (center pane) ---
-    function renderAction(a) {
-      const time = formatTime(a.timestamp);
-      let detail = '';
-      switch (a.type) {
-        case 'assistant_text': {
-          const t = a.text||''; detail = `<div class="action-detail${t.length>200?' collapsed':''}">${escapeHtml(t)}</div>`; break;
+    // --- File Graph (center pane top) ---
+    let fileGraph = null;
+    let sigmaInstance = null;
+    let lastActionCount = 0;
+
+    async function loadGraph() {
+      const container = document.getElementById('graph-container');
+      const statusEl = document.getElementById('graph-status');
+      if (!container) return;
+
+      if (!fileGraph) {
+        statusEl.textContent = 'indexing...';
+        try {
+          const filesRes = await fetch(`/api/sessions/${pid}/files`);
+          const files = await filesRes.json();
+          if (files.length === 0) { statusEl.textContent = 'no files'; return; }
+          fileGraph = window.FileGraph.buildFileGraph(files);
+          sigmaInstance = window.FileGraph.initSigma(container, fileGraph);
+          statusEl.textContent = files.length + ' files';
+          setTimeout(() => sigmaInstance.getCamera().animatedReset({ duration: 300 }), 500);
+        } catch (e) {
+          statusEl.textContent = 'error: ' + e.message;
+          return;
         }
-        case 'tool_use':
-          switch (a.tool) {
-            case 'Bash': detail = `${a.description?`<div class="action-desc">${escapeHtml(a.description)}</div>`:''}<div class="action-cmd">${escapeHtml(a.command||'')}</div>`; break;
-            case 'Read': case 'Write': case 'Edit': detail = `<div class="action-file">${escapeHtml(a.filePath||'')}</div>`; break;
-            case 'Glob': detail = `<div class="action-desc">${escapeHtml(a.pattern||'')}</div>`; break;
-            case 'Grep': detail = `<div class="action-desc">/${escapeHtml(a.pattern||'')}/ ${a.path?'in '+escapeHtml(a.path):''}</div>`; break;
-            case 'Agent': detail = `<div class="action-desc">${escapeHtml(a.agentType||'')} — ${escapeHtml(a.description||'')}</div>`; break;
-            default: detail = a.input ? `<div class="action-detail collapsed">${escapeHtml(a.input)}</div>` : '';
-          }
-          break;
       }
-      const label = a.type === 'tool_use' ? a.tool : 'CLAUDE';
-      return `<div class="action-item ${a.type}"><div class="action-head"><span class="action-type">${label}</span><span class="action-time">${time}</span></div>${detail}</div>`;
+
+      try {
+        const actionsRes = await fetch(`/api/sessions/${pid}/actions`);
+        const turns = await actionsRes.json();
+        const allActions = [];
+        for (const t of turns) allActions.push(...t.actions);
+        window.FileGraph.applyActivity(fileGraph, allActions, currentSession?.cwd || '');
+        lastActionCount = allActions.length;
+        sigmaInstance?.refresh();
+      } catch {}
     }
 
-    async function loadActions() {
-      const res = await fetch(`/api/sessions/${pid}/actions`);
-      const turns = await res.json();
-      const scroll = document.getElementById('actions-scroll');
-
-      if (turns.length === 0) { scroll.innerHTML = '<div class="pane-spacer"></div><div class="sup-empty">no actions</div>'; return; }
-
-      scroll.innerHTML = '<div class="pane-spacer"></div>' + turns.map((t, i) => {
-        const time = formatTime(t.timestamp);
-        const preview = escapeHtml((t.humanMessage||'').split('\n')[0].slice(0,80));
-        const isLast = i === turns.length - 1;
-        return `<div class="turn-group${isLast?'':' collapsed'}">
-          <div class="turn-header" onclick="this.parentElement.classList.toggle('collapsed')">
-            <span class="turn-arrow">${isLast?'▼':'▶'}</span>
-            <span class="turn-preview">${preview}</span>
-            <span class="turn-meta">${t.actions.length} · ${time}</span>
-          </div>
-          <div class="turn-body">${t.actions.map(a=>renderAction(a)).join('')}</div>
-        </div>`;
-      }).join('');
-
-      scroll.scrollTop = scroll.scrollHeight;
+    function startGraphPolling() {
+      setInterval(async () => {
+        if (!fileGraph) return;
+        try {
+          const res = await fetch(`/api/sessions/${pid}/actions`);
+          const turns = await res.json();
+          const all = [];
+          for (const t of turns) all.push(...t.actions);
+          window.FileGraph.applyActivity(fileGraph, all, currentSession?.cwd || '');
+          lastActionCount = all.length;
+          sigmaInstance?.refresh();
+        } catch {}
+      }, 5000);
     }
 
     // --- Messages (right pane) ---
@@ -600,7 +808,7 @@
         scroll.innerHTML = '<div class="pane-spacer"></div>' + messages.map(m => {
           return `<div class="message ${m.role}">
             <div class="message-head"><span class="message-role">${m.role==='human'?'YOU':'CLAUDE'}</span><span class="message-time">${formatTime(m.timestamp)}</span></div>
-            <div class="message-text">${escapeHtml(m.text)}</div>
+            <div class="message-text">${m.role === 'human' ? escapeHtml(m.text) : renderMarkdown(m.text)}</div>
           </div>`;
         }).join('');
       }
@@ -632,7 +840,7 @@
         try {
           const r = await fetch(`/api/sessions/${pid}/send`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({message:text}) });
           const d = await r.json();
-          if (d.ok) { status.textContent='sent'; input.value=''; input.focus(); setTimeout(()=>{loadActions();loadMessages();},4000); }
+          if (d.ok) { status.textContent='sent'; input.value=''; input.focus(); setTimeout(()=>{loadGraph();loadMessages();},4000); }
           else { status.textContent=d.error; status.className='send-status error'; }
         } catch(e) { status.textContent=e.message; status.className='send-status error'; }
         btn.disabled = false;
@@ -658,18 +866,34 @@
       const chatContent = document.getElementById('sup-chat-content');
 
       if (!status.active) {
+        // Auto-start supervisor if session is managed
+        if (currentSession?.managed) {
+          chatContent.innerHTML = `<div class="sup-empty">starting supervisor<span class="cursor"></span></div>`;
+          statusText.textContent = 'starting...';
+          await startSupervisor();
+          return;
+        }
         supervisorActive = false;
-        sendArea.style.display = 'none';
-        chatContent.innerHTML = `<div class="sup-empty"><button class="sup-btn" id="sup-start">START SUPERVISOR</button></div>`;
+        chatContent.innerHTML = `<div class="sup-empty">supervisor requires a ccboard-managed session</div>`;
         statusText.textContent = '';
-        document.getElementById('sup-start')?.addEventListener('click', startSupervisor);
         if (supPollInterval) { clearInterval(supPollInterval); supPollInterval = null; }
         return;
       }
 
       supervisorActive = true;
       sendArea.style.display = '';
-      statusText.innerHTML = `${status.isWaiting ? 'ready' : 'thinking...'} ${status.tmuxSession ? `<span class="sup-tmux" onclick="navigator.clipboard.writeText('tmux attach -t ${escapeHtml(status.tmuxSession)}');this.textContent='copied!'">tmux</span>` : ''}`;
+      statusText.textContent = status.isWaiting ? 'ready' : 'thinking...';
+
+      // Show supervisor tmux command in header
+      const supTmuxEl = document.getElementById('sup-tmux-cmd');
+      if (status.tmuxSession) {
+        supTmuxEl.textContent = 'tmux attach -t ' + status.tmuxSession;
+        supTmuxEl.onclick = () => {
+          navigator.clipboard.writeText('tmux attach -t ' + status.tmuxSession);
+          supTmuxEl.textContent = 'copied!';
+          setTimeout(() => { supTmuxEl.textContent = 'tmux attach -t ' + status.tmuxSession; }, 1500);
+        };
+      }
 
       // Load chat messages
       const msgRes = await fetch(`/api/sessions/${pid}/supervisor/messages`);
@@ -686,7 +910,7 @@
               <span class="message-role">${m.role==='human'?'YOU':'SUPERVISOR'}</span>
               <span class="message-time">${formatTime(m.timestamp)}</span>
             </div>
-            <div class="message-text">${escapeHtml(m.text)}</div>
+            <div class="message-text">${m.role === 'human' ? escapeHtml(m.text) : renderMarkdown(m.text)}</div>
           </div>
         `).join('');
       }
@@ -706,7 +930,7 @@
         input.placeholder = 'Supervisor is thinking...';
       }
 
-      if (!supPollInterval) supPollInterval = setInterval(loadSupervisorChat, 5000);
+      // SSE handles real-time updates now
     }
 
     async function startSupervisor() {
@@ -827,14 +1051,176 @@
     document.getElementById('review-modal').addEventListener('click', e => { if(e.target===e.currentTarget) e.currentTarget.classList.remove('open'); });
     document.addEventListener('keydown', e => { if(e.key==='Escape') document.getElementById('review-modal').classList.remove('open'); });
 
+    // --- Real-time SSE streams ---
+
+    function appendMessage(scrollId, role, text, timestamp, roleLabel) {
+      const scroll = document.getElementById(scrollId);
+      if (!scroll) return;
+      const div = document.createElement('div');
+      div.className = 'message ' + role;
+      div.innerHTML = `
+        <div class="message-head">
+          <span class="message-role">${roleLabel || (role === 'human' ? 'YOU' : 'CLAUDE')}</span>
+          <span class="message-time">${formatTime(timestamp)}</span>
+        </div>
+        <div class="message-text">${role === 'human' ? escapeHtml(text) : renderMarkdown(text)}</div>`;
+      scroll.appendChild(div);
+      scroll.scrollTop = scroll.scrollHeight;
+    }
+
+    function connectAgentStream() {
+      const es = new EventSource(`/api/sessions/${pid}/stream`);
+      es.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.type === 'message') {
+            appendMessage('messages-scroll', data.role, data.text, data.timestamp,
+              data.role === 'human' ? 'YOU' : 'CLAUDE');
+          }
+        } catch {}
+      };
+      es.onerror = () => {
+        es.close();
+        // Reconnect after 3 seconds
+        setTimeout(connectAgentStream, 3000);
+      };
+    }
+
+    function connectSupervisorStream() {
+      const es = new EventSource(`/api/sessions/${pid}/supervisor/stream`);
+      es.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.type === 'message') {
+            // Remove the "loading" placeholder if present
+            const content = document.getElementById('sup-chat-content');
+            const empty = content?.querySelector('.sup-empty');
+            if (empty) empty.remove();
+
+            appendMessage('sup-chat-scroll', data.role, data.text, data.timestamp,
+              data.role === 'human' ? 'YOU' : 'SUPERVISOR');
+          }
+          if (data.type === 'status') {
+            const statusText = document.getElementById('sup-status-text');
+            const input = document.getElementById('sup-input');
+            const btn = document.getElementById('sup-send-btn');
+            if (statusText) statusText.textContent = data.isWaiting ? 'ready' : 'thinking...';
+            if (input) { input.disabled = !data.isWaiting; input.placeholder = data.isWaiting ? 'Talk to supervisor...' : 'Supervisor is thinking...'; }
+            if (btn) btn.disabled = !data.isWaiting;
+          }
+        } catch {}
+      };
+      es.onerror = () => {
+        es.close();
+        setTimeout(connectSupervisorStream, 3000);
+      };
+    }
+
     // --- Init ---
     async function init() {
       await loadSessionInfo();
-      await Promise.all([loadContext(), loadActions(), loadMessages(), loadSupervisorChat(), loadReviews()]);
-      // Poll reviews every 15s
+      await Promise.all([loadContext(), loadGraph(), loadMessages(), loadSupervisorChat(), loadReviews()]);
+      startGraphPolling();
       setInterval(loadReviews, 15000);
+      setInterval(loadContext, 10000);
+
+      // Real-time agent chat via SSE
+      connectAgentStream();
+      // Real-time supervisor chat via SSE
+      connectSupervisorStream();
     }
     init();
+
+    // --- Resizable panes ---
+    function setupResize(handleId, direction, beforeId, afterId) {
+      const handle = document.getElementById(handleId);
+      const before = document.getElementById(beforeId);
+      const after = afterId ? document.getElementById(afterId) : null;
+      if (!handle || !before) return;
+
+      let startPos, startBefore, startAfter;
+
+      handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        handle.classList.add('active');
+        document.body.style.cursor = direction === 'col' ? 'col-resize' : 'row-resize';
+        document.body.style.userSelect = 'none';
+
+        if (direction === 'col') {
+          startPos = e.clientX;
+          startBefore = before.offsetWidth;
+          if (after) startAfter = after.offsetWidth;
+        } else {
+          startPos = e.clientY;
+          startBefore = before.offsetHeight;
+          if (after) startAfter = after.offsetHeight;
+        }
+
+        function onMove(e) {
+          const delta = direction === 'col' ? e.clientX - startPos : e.clientY - startPos;
+          const newBefore = Math.max(150, startBefore + delta);
+          if (direction === 'col') {
+            before.style.width = newBefore + 'px';
+            if (after) after.style.width = Math.max(150, startAfter - delta) + 'px';
+          } else {
+            before.style.flex = 'none';
+            before.style.height = newBefore + 'px';
+            if (after) { after.style.flex = '1'; }
+          }
+          // Refresh sigma if graph container changed
+          if (sigmaInstance) sigmaInstance.refresh();
+        }
+
+        function onUp() {
+          handle.classList.remove('active');
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          if (sigmaInstance) sigmaInstance.refresh();
+        }
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    }
+
+    setupResize('resize-left', 'col', 'pane-supervisor', null);
+    setupResize('resize-right', 'col', 'pane-messages', null);
+    setupResize('resize-center-v', 'row', 'pane-graph-half', 'pane-reviews-half');
+
+    // For right resize, drag left = shrink right pane
+    (function() {
+      const handle = document.getElementById('resize-right');
+      const pane = document.getElementById('pane-messages');
+      if (!handle || !pane) return;
+      // Override: drag right handle affects the right pane inversely
+      handle.removeEventListener && handle.replaceWith(handle.cloneNode(true));
+      const h = document.getElementById('resize-right');
+      let startX, startW;
+      h.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        h.classList.add('active');
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        startX = e.clientX;
+        startW = pane.offsetWidth;
+        function onMove(e) {
+          pane.style.width = Math.max(150, startW - (e.clientX - startX)) + 'px';
+          if (sigmaInstance) sigmaInstance.refresh();
+        }
+        function onUp() {
+          h.classList.remove('active');
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          if (sigmaInstance) sigmaInstance.refresh();
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    })();
   </script>
 </body>
 </html>
