@@ -90,9 +90,11 @@ The center pane shows an interactive file graph (Sigma.js) that traces the agent
 - Click any lit node → popup with timeline, action details, and diffs
 - Arrow keys navigate between nodes in the path
 
-## Phases
+## Roadmap
 
-See [PHASES.md](PHASES.md) for the full roadmap including the supervisor vision.
+See [PHASES.md](PHASES.md) for the phase roadmap and [SUBAGENTS.md](SUBAGENTS.md) for the supervisor's subagent architecture.
+
+**Next:** 5 subagent categories — MICRO code analysis, MACRO architecture review, 10th Man adversarial testing, CC failure tracking, Human failure tracking. First-run deep scan + incremental diffs.
 
 ## License
 
