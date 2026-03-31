@@ -1679,7 +1679,6 @@ app.get("/api/sessions/:pid/supervisor/reviews", async (req, res) => {
 // Server-Sent Events — real-time JSONL streaming
 // ============================================================
 
-import { watch } from "fs";
 
 // SSE endpoint: streams new JSONL entries as they're written
 app.get("/api/sessions/:pid/stream", async (req, res) => {
@@ -1743,17 +1742,12 @@ app.get("/api/sessions/:pid/stream", async (req, res) => {
     } catch {}
   }
 
-  // Watch the file
-  let watcher;
-  if (jsonlPath) {
-    try {
-      watcher = watch(jsonlPath, () => sendNewEntries());
-    } catch {}
-  }
+  // Poll every 1 second (fs.watch is unreliable on macOS)
+  const interval = setInterval(sendNewEntries, 1000);
+  sendNewEntries();
 
-  // Cleanup on disconnect
   req.on("close", () => {
-    if (watcher) watcher.close();
+    clearInterval(interval);
   });
 });
 
@@ -1828,14 +1822,107 @@ app.get("/api/sessions/:pid/supervisor/stream", async (req, res) => {
     res.write(`data: ${JSON.stringify({ type: "status", isWaiting })}\n\n`);
   }, 2000);
 
-  let watcher;
-  try {
-    watcher = watch(supJsonlPath, () => sendNewEntries());
-  } catch {}
+  // Poll every 1 second (fs.watch is unreliable on macOS)
+  const jsonlInterval = setInterval(sendNewEntries, 1000);
+  sendNewEntries();
 
   req.on("close", () => {
-    if (watcher) watcher.close();
+    clearInterval(jsonlInterval);
     clearInterval(statusInterval);
+  });
+});
+
+// SSE: stream agent's live terminal output (pane capture)
+app.get("/api/sessions/:pid/pane-stream", async (req, res) => {
+  const pid = Number(req.params.pid);
+  const sessions = await getSessions();
+  const session = sessions.find((s) => s.pid === pid);
+  if (!session || !session.managed || !session.tmuxSession) {
+    return res.status(404).json({ error: "managed session not found" });
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  res.write('data: {"type":"connected"}\n\n');
+
+  const tmux = session.tmuxSession;
+  let lastContent = "";
+  let lastStatus = "";
+
+  function capturePaneAndSend() {
+    try {
+      const pane = execSync(
+        `tmux capture-pane -t ${tmux} -p -S -50 2>/dev/null`,
+        { encoding: "utf-8" }
+      );
+
+      const lines = pane.split("\n");
+
+      // Detect status: working or waiting
+      const hasPrompt = lines.some((l) => l.includes("❯"));
+      const status = hasPrompt ? "waiting" : "working";
+
+      // Extract the current working output:
+      // When working: everything after the last ❯ (the user's message) or the last ⏺ marker
+      // When waiting: just the status
+      let workingText = "";
+      let spinnerVerb = "";
+
+      if (status === "working") {
+        // Find the last assistant output marker ⏺
+        let startIdx = 0;
+        for (let i = lines.length - 1; i >= 0; i--) {
+          if (lines[i].includes("⏺")) {
+            startIdx = i;
+            break;
+          }
+        }
+
+        // Collect text from there to the bottom, excluding chrome
+        const outputLines = [];
+        for (let i = startIdx; i < lines.length; i++) {
+          const line = lines[i];
+          // Skip the status bar at the very bottom
+          if (line.includes("bypass permissions") || line.includes("Auto-update failed")) continue;
+          if (line.match(/^[─━]+$/)) continue;
+          outputLines.push(line);
+        }
+        workingText = outputLines.join("\n").trim();
+
+        // Extract spinner verb — look for patterns like "⏵ Editing...", "✻ Crunched for..."
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const line = lines[i].trim();
+          if (line.startsWith("⏵") || line.startsWith("✻") || line.match(/^[A-Z][a-z]+ing\s/)) {
+            spinnerVerb = line;
+            break;
+          }
+        }
+      }
+
+      // Only send if something changed
+      const contentKey = status + "|" + workingText.slice(-200) + "|" + spinnerVerb;
+      if (contentKey !== lastContent) {
+        lastContent = contentKey;
+        res.write(
+          `data: ${JSON.stringify({
+            type: "pane",
+            status,
+            workingText: workingText.slice(-2000),
+            spinnerVerb,
+          })}\n\n`
+        );
+      }
+    } catch {}
+  }
+
+  const interval = setInterval(capturePaneAndSend, 500);
+  capturePaneAndSend(); // immediate first capture
+
+  req.on("close", () => {
+    clearInterval(interval);
   });
 });
 

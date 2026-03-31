@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ccboard — session</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark-dimmed.min.css" />
+  <link rel="stylesheet" href="/ccboard-shell.css" />
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
@@ -181,6 +182,7 @@
     .pane-scroll {
       flex: 1;
       overflow-y: auto;
+      overflow-x: hidden;
       display: flex;
       flex-direction: column;
       padding: 4px;
@@ -345,6 +347,8 @@
       line-height: 1.5;
       font-family: 'Inter', -apple-system, sans-serif;
       word-break: break-word;
+      overflow-x: hidden;
+      max-width: 100%;
     }
 
     .message-text p { margin: 0 0 8px; }
@@ -389,6 +393,7 @@
       border-radius: 4px;
       overflow: hidden;
       position: relative;
+      max-width: 100%;
     }
 
     .message-text pre code {
@@ -1075,6 +1080,9 @@
         try {
           const data = JSON.parse(e.data);
           if (data.type === 'message') {
+            // Remove live output when a complete message arrives
+            const live = document.getElementById('agent-live-output');
+            if (live) live.remove();
             appendMessage('messages-scroll', data.role, data.text, data.timestamp,
               data.role === 'human' ? 'YOU' : 'CLAUDE');
           }
@@ -1082,8 +1090,65 @@
       };
       es.onerror = () => {
         es.close();
-        // Reconnect after 3 seconds
         setTimeout(connectAgentStream, 3000);
+      };
+    }
+
+    // Live pane stream — shows what the agent is currently outputting
+    function connectPaneStream() {
+      if (!currentSession?.managed) return;
+      const es = new EventSource(`/api/sessions/${pid}/pane-stream`);
+      es.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.type !== 'pane') return;
+
+          const scroll = document.getElementById('messages-scroll');
+          let live = document.getElementById('agent-live-output');
+
+          if (data.status === 'waiting') {
+            // Agent is waiting — remove live output
+            if (live) live.remove();
+            return;
+          }
+
+          // Agent is working — show live output
+          if (!live) {
+            live = document.createElement('div');
+            live.id = 'agent-live-output';
+            live.style.cssText = 'border-left:2px solid var(--cyan-faint);padding:6px 8px;margin-bottom:1px;background:var(--bg-card);';
+            scroll.appendChild(live);
+          }
+
+          let html = '';
+
+          // Spinner verb
+          if (data.spinnerVerb) {
+            html += `<div style="font-size:10px;color:var(--cyan-dim);margin-bottom:4px;display:flex;align-items:center;gap:6px;">
+              <span class="cursor"></span>
+              <span>${escapeHtml(data.spinnerVerb)}</span>
+            </div>`;
+          }
+
+          // Streaming text
+          if (data.workingText) {
+            html += `<div style="font-size:11px;color:var(--text);font-family:'Inter',sans-serif;white-space:pre-wrap;word-break:break-word;line-height:1.4;max-height:300px;overflow-y:auto;">${escapeHtml(data.workingText)}</div>`;
+          }
+
+          if (!html) {
+            html = `<div style="font-size:10px;color:var(--cyan-dim);display:flex;align-items:center;gap:6px;">
+              <span class="cursor"></span>
+              <span>working...</span>
+            </div>`;
+          }
+
+          live.innerHTML = html;
+          scroll.scrollTop = scroll.scrollHeight;
+        } catch {}
+      };
+      es.onerror = () => {
+        es.close();
+        setTimeout(connectPaneStream, 3000);
       };
     }
 
@@ -1125,10 +1190,10 @@
       setInterval(loadReviews, 15000);
       setInterval(loadContext, 10000);
 
-      // Real-time agent chat via SSE
+      // Real-time streams
       connectAgentStream();
-      // Real-time supervisor chat via SSE
       connectSupervisorStream();
+      connectPaneStream();
     }
     init();
 
@@ -1223,5 +1288,6 @@
       });
     })();
   </script>
+  <script src="/ccboard-shell.js"></script>
 </body>
 </html>

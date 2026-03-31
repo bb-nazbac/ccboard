@@ -1,0 +1,289 @@
+/* Command palette */
+#cmd-palette-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 9000;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 15vh;
+}
+
+[data-theme="light"] #cmd-palette-overlay {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+#cmd-palette {
+  width: 480px;
+  max-width: 90vw;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+[data-theme="light"] #cmd-palette {
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+}
+
+#cmd-input {
+  width: 100%;
+  background: var(--bg);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-bright);
+  font-family: 'Share Tech Mono', 'Courier New', monospace;
+  font-size: 14px;
+  padding: 12px 16px;
+  outline: none;
+}
+
+#cmd-input::placeholder {
+  color: var(--text-dim);
+}
+
+#cmd-results {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.cmd-item {
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: 'Share Tech Mono', 'Courier New', monospace;
+}
+
+.cmd-item:hover,
+.cmd-item.cmd-selected {
+  background: var(--bg-card-hover);
+  color: var(--text-bright);
+}
+
+/* Hide CRT effects in light mode */
+body.no-crt::after {
+  opacity: 0 !important;
+}
+
+body.no-crt::before {
+  opacity: 0 !important;
+}
+
+/* Light mode overrides for specific elements */
+[data-theme="light"] .session {
+  border-left-width: 3px;
+}
+
+[data-theme="light"] .session.waiting {
+  border-left-color: var(--amber);
+  background: var(--amber-faint);
+}
+
+[data-theme="light"] .session.working {
+  border-left-color: var(--cyan);
+  background: var(--cyan-faint);
+}
+
+[data-theme="light"] .managed-badge {
+  color: var(--green);
+  border-color: var(--green-dim);
+}
+
+[data-theme="light"] .rescue-cmd {
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+/* Light mode for session page elements */
+[data-theme="light"] .pane {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+}
+
+[data-theme="light"] .pane-header {
+  background: var(--bg);
+  border-bottom-color: var(--border);
+}
+
+[data-theme="light"] .message.human {
+  background: var(--amber-faint);
+  border-left-color: var(--amber-dim);
+}
+
+[data-theme="light"] .message.assistant {
+  background: var(--bg-card);
+  border-left-color: var(--green-dim);
+}
+
+[data-theme="light"] .send-input {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--text-bright);
+}
+
+[data-theme="light"] .send-btn {
+  border-color: var(--green-dim);
+  color: var(--green);
+}
+
+[data-theme="light"] .sup-btn {
+  border-color: var(--green-dim);
+  color: var(--green);
+}
+
+[data-theme="light"] .status-badge.waiting {
+  border-color: var(--amber);
+}
+
+[data-theme="light"] .status-badge.working {
+  border-color: var(--cyan);
+}
+
+[data-theme="light"] .ctx-stat {
+  background: var(--bg);
+}
+
+[data-theme="light"] .pane-resize {
+  background: var(--border);
+}
+
+[data-theme="light"] .pane-resize-v {
+  background: var(--border);
+}
+
+/* Light mode code blocks */
+[data-theme="light"] .message-text pre code {
+  background: #f6f8fa;
+  color: #24292e;
+  border-color: var(--border);
+}
+
+[data-theme="light"] .message-text code {
+  background: #f0f0f0;
+  color: #d63384;
+  border-color: var(--border);
+}
+
+/* Light mode graph container */
+[data-theme="light"] #graph-container {
+  background: #fafafa !important;
+}
+
+/* Light mode reviews */
+[data-theme="light"] .sup-review-item {
+  background: var(--bg) !important;
+  border: 1px solid var(--border);
+}
+
+[data-theme="light"] .sup-summary-row {
+  border-bottom-color: var(--border);
+}
+
+[data-theme="light"] .sup-section-title {
+  color: var(--text-dim);
+}
+
+/* Light mode tables in markdown */
+[data-theme="light"] .message-text th {
+  background: var(--bg) !important;
+  color: var(--text-bright);
+  border-color: var(--border);
+}
+
+[data-theme="light"] .message-text td {
+  border-color: var(--border);
+}
+
+[data-theme="light"] .message-text table {
+  border-color: var(--border);
+}
+
+/* Light mode blockquotes */
+[data-theme="light"] .message-text blockquote {
+  border-left-color: var(--green-dim);
+  color: var(--text);
+}
+
+/* Light mode — no horizontal scroll on chat panes */
+[data-theme="light"] .pane-scroll {
+  overflow-x: hidden;
+}
+
+/* Light mode node popup */
+[data-theme="light"] #node-popup-overlay {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="light"] #node-popup-overlay > div {
+  background: var(--bg-card) !important;
+  border-color: var(--border) !important;
+  color: var(--text) !important;
+}
+
+/* Light mode review modal */
+[data-theme="light"] .review-modal-overlay {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="light"] .review-modal {
+  background: var(--bg-card) !important;
+  border-color: var(--border) !important;
+}
+
+[data-theme="light"] .rm-header {
+  border-bottom-color: var(--border);
+}
+
+[data-theme="light"] .rm-finding {
+  background: var(--bg) !important;
+}
+
+[data-theme="light"] .rm-close {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+/* Light mode general overrides for hardcoded dark colors in session.html */
+[data-theme="light"] .sup-empty {
+  color: var(--text-dim);
+}
+
+[data-theme="light"] .action-item {
+  background: var(--bg) !important;
+}
+
+[data-theme="light"] .turn-header {
+  background: var(--bg) !important;
+}
+
+[data-theme="light"] .action-cmd {
+  background: var(--bg-card-hover) !important;
+  color: var(--text-bright);
+}
+
+[data-theme="light"] .send-area {
+  border-top-color: var(--border);
+}
+
+[data-theme="light"] .token-bar {
+  background: var(--border);
+}
+
+[data-theme="light"] .context-row {
+  gap: 1px;
+}
+
+[data-theme="light"] .header {
+  border-bottom-color: var(--border);
+}
+
+/* Light mode scrollbar */
+[data-theme="light"] .pane-scroll::-webkit-scrollbar-thumb {
+  background: #ccc;
+}
+
+[data-theme="light"] .rm-body::-webkit-scrollbar-thumb {
+  background: #ccc;
+}
