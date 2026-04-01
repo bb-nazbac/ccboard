@@ -2,52 +2,28 @@
 
 ## Output Structure
 
-Every subagent produces a JSON file with the same envelope structure. The UI reads the envelope for the review rows. The detail popup reads the domain-specific payload.
-
-### Common Envelope
+Each subagent produces a JSON file with its own structure optimised for its domain. The only contract with the UI is a minimal set of fields at the top level that the review rows need:
 
 ```json
 {
-  "id": "micro-2026-04-01T10-30-00",
-  "category": "micro",
-  "displayName": "MICRO — Code Behaviour",
-  "runType": "deep-scan|incremental",
+  "category": "micro|macro|10th-man-micro|10th-man-macro|cc-failures|human-failures",
   "status": "ok|warning|issue|critical",
-  "summary": "Found 3 issues: 1 high severity race condition in auth flow, 2 medium inefficiencies in query layer",
-  "timestamp": "2026-04-01T10:30:00Z",
-  "duration": "45s",
-  "anchor": {
-    "commitHash": "a1b2c3d",
-    "commitMessage": "feat: add parallel dialer",
-    "committedAt": "2026-04-01T10:25:00Z"
-  },
-  "scope": {
-    "runScope": "full|changed-only",
-    "filesAnalysed": ["src/auth.ts", "src/db/users.ts", "src/dialer/pool.ts"],
-    "filesChanged": ["src/auth.ts"],
-    "linesAnalysed": 1250,
-    "previousRunId": "micro-2026-04-01T09-00-00"
-  },
-  "metrics": {
-    "total": 3,
-    "new": 2,
-    "carried": 1,
-    "resolved": 0,
-    "bySeverity": { "low": 0, "medium": 2, "high": 1, "critical": 0 },
-    "byConfidence": { "low": 0, "medium": 1, "high": 2 }
-  },
-  "findings": [...]
+  "summary": "one line for the review row",
+  "timestamp": "ISO timestamp of this run"
 }
 ```
 
-### The `anchor` Field
+Everything beyond these 4 fields is domain-specific. The detail popup reads the full file and renders it according to the category.
 
-This is how we track what the analysis was run against.
+The server aggregates by scanning `.ccboard/reports/*/latest.json` and reading these 4 fields. No cc-sup involvement needed for aggregation.
+
+### Anchor
+
+Every report should include an anchor so we know what git state it was run against. This is the only other recommended (not required) common field:
 
 ```json
 "anchor": {
   "commitHash": "a1b2c3d",
-  "commitMessage": "feat: add parallel dialer",
   "committedAt": "2026-04-01T10:25:00Z"
 }
 ```
@@ -75,9 +51,11 @@ This gives the UI a clear picture: "2 new issues, 1 carried from last run, 1 res
 
 ---
 
-## Domain-Specific Finding Structures
+## Domain-Specific Structures
 
-### MICRO + MACRO Findings
+Each category defines its own structure. These are examples — the subagents can evolve their structures as needed. The only hard requirement is the 4 UI fields at the top level (`category`, `status`, `summary`, `timestamp`).
+
+### MICRO + MACRO
 
 ```json
 {
@@ -206,8 +184,7 @@ Pattern-based — each finding is a behavioural observation:
 ├── project.md
 ├── tasks.md
 ├── bottlenecks.md
-├── session.json
-└── review.json               ← combined summary for the UI
+└── session.json
 ```
 
 ### `anchors.json`
@@ -238,35 +215,11 @@ On each run:
 4. Both passed to subagents
 5. After run: update `anchors.json` with new anchor
 
-### `review.json` — Combined UI Summary
+### UI Aggregation
 
-The UI reads this single file to populate the review rows:
+The ccboard server (not cc-sup) reads all `.ccboard/reports/*/latest.json` files, extracts the 4 common fields (`category`, `status`, `summary`, `timestamp`), and serves them as review rows. Click any row → the server returns the full `latest.json` for that category, and the UI renders the detail popup based on the category type.
 
-```json
-{
-  "lastUpdated": "2026-04-01T10:30:00Z",
-  "categories": [
-    {
-      "category": "micro",
-      "displayName": "MICRO — Code Behaviour",
-      "status": "warning",
-      "summary": "3 findings (1 high, 2 medium)",
-      "lastRun": "2026-04-01T10:30:00Z",
-      "metrics": { "total": 3, "new": 2, "carried": 1, "resolved": 0 }
-    },
-    {
-      "category": "macro",
-      "displayName": "MACRO — Architecture",
-      "status": "ok",
-      "summary": "No issues",
-      "lastRun": "2026-04-01T10:30:00Z",
-      "metrics": { "total": 0 }
-    }
-  ]
-}
-```
-
-The UI renders each entry as a review row. Click → loads `.ccboard/reports/{category}/latest.json` for the full detail popup.
+No `review.json` aggregation file needed. The server reads the individual files on demand.
 
 ---
 
@@ -305,8 +258,7 @@ The subagent then:
 
 ### After the run
 
-1. `latest.json` updated
+1. `latest.json` updated for each category that ran
 2. Copy saved to `runs/` with timestamp
-3. `review.json` regenerated from all `latest.json` files
-4. `anchors.json` updated with current commit hash
-5. UI refreshes automatically (reads `review.json`)
+3. `anchors.json` updated with current commit hash
+4. UI refreshes automatically (server reads `latest.json` files on demand)
