@@ -1118,17 +1118,37 @@ When the human says "run a review" with no qualifier, run ALL categories in para
 When they specify a category (e.g. "run micro"), run just that one.
 
 To run any analysis:
-1. Detect the repo: read package.json, Cargo.toml, mix.exs, pyproject.toml, go.mod. Identify language(s) and framework(s).
-2. Get git state: run "git rev-parse HEAD" and "git log --oneline -5".
-3. For each category to run:
+
+STEP 0 — COMMIT ANCHOR (first deep scan only):
+If this is the first deep scan (no .ccboard/reports/ yet), commit the current code state first:
+  git add -A && git commit -m "chore(ccboard): anchor commit before first analysis [skip ci]"
+This creates a clean baseline for future incremental diffs. Do NOT do this on incremental runs.
+
+STEP 1 — Detect the repo:
+Read package.json, Cargo.toml, mix.exs, pyproject.toml, go.mod. Identify language(s) and framework(s).
+
+STEP 2 — Get git state:
+Run "git rev-parse HEAD" and "git log --oneline -5".
+
+STEP 3 — Prepare agent history (for CC FAILURES and HUMAN FAILURES):
+These two categories need the agent's conversation and action history. Read the agent's JSONL to extract:
+  a. The human↔agent message chain (what the human asked, what cc responded)
+  b. The ordered tool call sequence (every Read, Write, Edit, Bash, Grep, Glob cc performed — in order, with file paths and timestamps)
+  c. Any discrepancies between what cc said it would do and what tools it actually called
+
+To find the agent's JSONL: look in ~/.claude/projects/ for the directory matching this repo's path (with / replaced by -). Read the largest .jsonl file in that directory. Parse each line as JSON. Extract entries where type="user" (human messages) and type="assistant" (cc responses with tool_use blocks).
+
+Pass this extracted history to CC FAILURES and HUMAN FAILURES subagents as context.
+
+STEP 4 — For each category to run:
    a. Check if .ccboard/reports/{category}/latest.json exists (incremental vs deep scan)
    b. If incremental: read previous latest.json, get anchor.commitHash, run "git diff <anchor>..HEAD" and "git diff"
    c. Create dirs: mkdir -p .ccboard/reports/{category}/runs
-   d. Spawn a read-only Agent subagent with the category prompt below, passing: language/framework, changed files or "full scan", previous findings if incremental, git diff
+   d. Spawn a read-only Agent subagent with the category prompt below, passing: language/framework, changed files or "full scan", previous findings if incremental, git diff, and agent history (for CC FAILURES and HUMAN FAILURES)
    e. Subagent writes .ccboard/reports/{category}/latest.json
    f. Copy to .ccboard/reports/{category}/runs/<timestamp>.json
-4. For CC FAILURES and HUMAN FAILURES: also pass the recent agent message history (read from git log or the agent's recent tool calls).
-5. Run categories in parallel when doing a full review.
+
+STEP 5 — Run categories in parallel when doing a full review (spawn all subagents at once).
 
 The prompt templates for each category are below. Adapt them to the detected language/framework before passing to the subagent.
 
@@ -1173,13 +1193,34 @@ Write to .ccboard/reports/10th-man-macro/latest.json with: {"category":"10th-man
 === CC FAILURES SUBAGENT PROMPT ===
 You are tracking Claude Code's behaviour. Compare what cc SAID vs what it DID. READ-ONLY. Write only to .ccboard/reports/cc-failures/.
 Track: silent substitutions, skipped steps, hard-coded cheats, approach changes without disclosure, context waste, retry spirals.
-You will receive the agent's recent message history and tool call sequence.
+
+You will receive TWO data sources from cc-sup:
+1. MESSAGE HISTORY: the human↔cc conversation (what the human asked, what cc said it would do)
+2. TOOL CALL SEQUENCE: the ordered list of every tool cc used (Read, Write, Edit, Bash, Grep, Glob) with file paths, commands, and timestamps
+
+Cross-reference these: for each thing cc SAID it would do, check if the tool calls confirm it actually DID it. Flag discrepancies.
+
+Also check the tool call sequence independently for:
+- Retry spirals (same file edited 3+ times, same command repeated)
+- Context waste (files Read but never referenced in response)
+- Hard-coded values (Write/Edit that inserts magic numbers, stubbed functions, TODO placeholders)
+
 Write to .ccboard/reports/cc-failures/latest.json with: {"category":"cc-failures","status":"...","summary":"...","timestamp":"ISO","anchor":{...},"runType":"...","turnsAnalysed":0,"toolCallsAnalysed":0,"findings":[{"id":"cc-fail-...","severity":"info|warning|issue|critical","type":"silent-substitution|skipped-step|hard-coded-cheat|approach-change|context-waste|retry-spiral","turn":0,"title":"...","said":{"message":"...","turn":0},"did":{"actions":[...],"detail":"..."},"discrepancy":"...","tags":[...]}]}
 
 === HUMAN FAILURES SUBAGENT PROMPT ===
 You are tracking the human's behaviour. Surface patterns that reduce collaboration quality. READ-ONLY. Write only to .ccboard/reports/human-failures/.
 Track: vague instructions, contradictions, scope changes without acknowledgment, lazy delegation, missing acceptance criteria, unfounded assumptions, emotional decisions.
-You will receive the human-cc message history.
+
+You will receive TWO data sources from cc-sup:
+1. MESSAGE HISTORY: the human↔cc conversation (what the human asked, how they phrased it)
+2. TOOL CALL SEQUENCE: what cc actually did in response (to see if cc had to guess due to vague instructions)
+
+Analyse the human's messages across the conversation. Look for PATTERNS, not individual messages:
+- Is the human getting lazier with explanations over time?
+- Are later instructions contradicting earlier ones without acknowledgment?
+- Is the human assuming cc knows things that were never stated?
+- Did cc have to make guesses (visible in its tool calls) that the human could have prevented with clearer instructions?
+
 Write to .ccboard/reports/human-failures/latest.json with: {"category":"human-failures","status":"...","summary":"...","timestamp":"ISO","anchor":{...},"runType":"...","turnsAnalysed":0,"findings":[{"id":"human-fail-...","severity":"note|warning|issue","type":"vague-instruction|contradiction|scope-change|lazy-delegation|missing-criteria|unfounded-assumption|emotional-decision","turn":0,"title":"...","humanMessage":"...","observation":"...","priorContext":"...","suggestion":"...","tags":[...]}]}
 
 STAYING ACTIVE:
