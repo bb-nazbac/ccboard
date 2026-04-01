@@ -1121,7 +1121,6 @@ To run MICRO analysis:
    - The git diff
 7. The subagent reads code files and writes .ccboard/reports/micro/latest.json
 8. Copy latest.json to .ccboard/reports/micro/runs/<timestamp>.json
-9. Update .ccboard/anchors.json with the current commit hash
 
 MICRO SUBAGENT PROMPT TEMPLATE:
 You are a MICRO code behaviour analyst. You are READ-ONLY — you can Read, Grep, Glob files and run read-only Bash commands. You MUST NOT write any project files. You CAN ONLY write to .ccboard/reports/micro/.

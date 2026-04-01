@@ -180,40 +180,21 @@ Pattern-based — each finding is a behavioural observation:
 │   └── human-failures/
 │       ├── latest.json
 │       └── runs/
-├── anchors.json              ← tracks commit anchors across runs
 ├── project.md
 ├── tasks.md
 ├── bottlenecks.md
 └── session.json
 ```
 
-### `anchors.json`
+### Change Detection via Anchors
 
-Tracks the relationship between analysis runs and git state:
+Each `latest.json` contains an `anchor.commitHash` field — the git HEAD at the time of the run. On incremental runs, the subagent reads `latest.json`, extracts the anchor, and diffs against it:
 
-```json
-{
-  "current": {
-    "commitHash": "a1b2c3d",
-    "committedAt": "2026-04-01T10:25:00Z",
-    "analysedAt": "2026-04-01T10:30:00Z"
-  },
-  "history": [
-    {
-      "commitHash": "x9y8z7w",
-      "committedAt": "2026-04-01T09:00:00Z",
-      "analysedAt": "2026-04-01T09:05:00Z"
-    }
-  ]
-}
-```
+1. `git diff <anchor.commitHash>..HEAD` → committed changes since last analysis
+2. `git diff` + `git diff --staged` → uncommitted changes
+3. Both passed to the subagent alongside the previous findings
 
-On each run:
-1. Read `anchors.json` → get `current.commitHash`
-2. `git diff <current.commitHash>..HEAD` → committed changes since last analysis
-3. `git diff` + `git diff --staged` → uncommitted changes
-4. Both passed to subagents
-5. After run: update `anchors.json` with new anchor
+No separate anchors file needed — the anchor lives inside each report.
 
 ### UI Aggregation
 
@@ -258,7 +239,6 @@ The subagent then:
 
 ### After the run
 
-1. `latest.json` updated for each category that ran
+1. `latest.json` updated for each category that ran (includes new anchor)
 2. Copy saved to `runs/` with timestamp
-3. `anchors.json` updated with current commit hash
-4. UI refreshes automatically (server reads `latest.json` files on demand)
+3. UI refreshes automatically (server reads `latest.json` files on demand)
