@@ -1094,8 +1094,8 @@ IDENTITY:
 
 CAPABILITIES — READ ONLY:
 - You CAN read any file (Read, Grep, Glob, Bash with read-only commands like cat, ls, find, git log, git diff)
-- You CAN spawn Agent subagents for analysis — they MUST also be read-only
-- You CAN write ONLY to the .ccboard/ folder (for review outputs, notes, plans)
+- You CAN spawn Agent subagents for analysis — they MUST also be read-only (no Write/Edit to project files)
+- You CAN write ONLY to the .ccboard/ folder (for reports, notes, plans)
 - You MUST NOT write, edit, or modify any project files outside .ccboard/
 - You MUST NOT run destructive Bash commands (no rm, no git commit, no npm install, etc.)
 
@@ -1103,18 +1103,45 @@ COMMUNICATING WITH THE AGENT:
 ${sendCmd}
 Only send messages to the agent when the human asks you to, or when you detect a critical issue that needs immediate intervention.
 
-REVIEW OUTPUTS:
-When you run analysis (on your own initiative or when asked), write results to .ccboard/:
-- .ccboard/review.json — combined review (same format as before)
-- .ccboard/{category}.json — individual category reviews
-- .ccboard/notes.md — your running notes, observations, plans
-First run: mkdir -p .ccboard && add .ccboard/ to .gitignore if not there.
+ANALYSIS SUBAGENTS:
+When the human asks you to "run a review" or "analyse the code", you kick off subagent analysis.
 
-Review JSON format for each category:
-{"category":"...","status":"ok|warning|issue","summary":"...","methodology":{"filesChecked":[...],"criteria":"...","baseline":"..."},"findings":[{"severity":"high|medium|low","location":"file:line","description":"...","suggestion":"...","evidence":"..."}]}
+Currently available: MICRO (code behaviour analysis).
 
-Combined .ccboard/review.json:
-{"summary":{"lastFewHours":"...","lastTenMinutes":"...","rightNow":"...","upNext":"..."},"review":{"codeQuality":<...>,"security":<...>,"scalability":<...>,"contextDrift":<...>},"reviewedAt":"<ISO timestamp>"}
+To run MICRO analysis:
+1. First, detect the repo: read package.json, Cargo.toml, mix.exs, pyproject.toml, go.mod — whatever exists. Identify the language(s) and framework(s).
+2. Check if .ccboard/reports/micro/latest.json exists (for incremental runs).
+3. Get the current git state: run "git rev-parse HEAD" and "git log --oneline -5".
+4. If incremental: read the previous latest.json, get its anchor.commitHash, run "git diff <anchor>..HEAD" and "git diff" for uncommitted changes.
+5. Create dirs: mkdir -p .ccboard/reports/micro/runs
+6. Spawn an Agent subagent with the MICRO analysis prompt (below), passing it:
+   - The language/framework you detected
+   - The list of changed files (or "full scan" if first run)
+   - The previous findings (if incremental)
+   - The git diff
+7. The subagent reads code files and writes .ccboard/reports/micro/latest.json
+8. Copy latest.json to .ccboard/reports/micro/runs/<timestamp>.json
+9. Update .ccboard/anchors.json with the current commit hash
+
+MICRO SUBAGENT PROMPT TEMPLATE:
+You are a MICRO code behaviour analyst. You are READ-ONLY — you can Read, Grep, Glob files and run read-only Bash commands. You MUST NOT write any project files. You CAN ONLY write to .ccboard/reports/micro/.
+
+Your job: read source code at the function/module level and detect problems that compile but cause unexpected runtime behaviour. Map the CODE BEHAVIOUR and determine if anything runs contrary to intentions. Challenge SCALABILITY and EFFICIENCY.
+
+What you check:
+- Silent failures (swallowed errors, missing edge cases, incorrect fallbacks)
+- Inefficiencies (unnecessary allocations, redundant computations, O(n²)+ on growable data)
+- Security (injection, auth bypass, data exposure, missing input validation)
+- Concurrency (race conditions, deadlocks, shared state without sync)
+- Type safety (coercion/casting issues, any-typed escapes)
+- Boundary conditions (off-by-one, null propagation, empty collections)
+- Behavioural mismatch (name implies X, implementation does Y)
+- Scalability (N+1 queries, unbounded loops, missing pagination, sync blocking in async, memory leaks)
+
+Write your findings to .ccboard/reports/micro/latest.json with this structure:
+{"category":"micro","status":"ok|warning|issue|critical","summary":"one line","timestamp":"ISO","anchor":{"commitHash":"...","committedAt":"..."},"runType":"deep-scan|incremental","language":"...","framework":"...","filesAnalysed":[...],"findings":[{"id":"micro-file-line-hash","severity":"low|medium|high|critical","title":"...","file":"...","line":0,"function":"...","description":"...","evidence":"actual code","impact":"...","suggestion":"...","tags":[...]}]}
+
+Status: ok=no findings, warning=low/medium only, issue=has high, critical=has critical.
 
 STAYING ACTIVE:
 - When you finish responding, tell the human what you're watching for or what you'd suggest next.
@@ -1654,25 +1681,48 @@ app.get("/api/sessions/:pid/supervisor/reviews", async (req, res) => {
   const session = sessions.find((s) => s.pid === pid);
   if (!session) return res.status(404).json({ error: "session not found" });
 
-  const ccboardDir = join(session.cwd, ".ccboard");
-  const reviews = {};
+  const reportsDir = join(session.cwd, ".ccboard", "reports");
+  const categories = [];
 
-  // Read individual category files
+  // Scan all category directories for latest.json
+  try {
+    const dirs = await readdir(reportsDir);
+    for (const dir of dirs) {
+      try {
+        const raw = await readFile(join(reportsDir, dir, "latest.json"), "utf-8");
+        const report = JSON.parse(raw);
+        categories.push({
+          category: report.category || dir,
+          status: report.status || "ok",
+          summary: report.summary || "No summary",
+          timestamp: report.timestamp || null,
+          // Include full report for detail popup
+          report,
+        });
+      } catch {}
+    }
+  } catch {}
+
+  // Also check old-style .ccboard/*.json files for backwards compat
+  const ccboardDir = join(session.cwd, ".ccboard");
   for (const cat of ["codeQuality", "security", "scalability", "contextDrift"]) {
     try {
       const raw = await readFile(join(ccboardDir, `${cat}.json`), "utf-8");
-      reviews[cat] = JSON.parse(raw);
+      const report = JSON.parse(raw);
+      // Only add if not already in categories from reports/
+      if (!categories.find((c) => c.category === cat)) {
+        categories.push({
+          category: cat,
+          status: report.status || "ok",
+          summary: report.summary || "No summary",
+          timestamp: report.timestamp || null,
+          report,
+        });
+      }
     } catch {}
   }
 
-  // Read combined review
-  let combined = null;
-  try {
-    const raw = await readFile(join(ccboardDir, "review.json"), "utf-8");
-    combined = JSON.parse(raw);
-  } catch {}
-
-  res.json({ reviews, combined });
+  res.json({ categories });
 });
 
 // ============================================================

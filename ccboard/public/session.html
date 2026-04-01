@@ -970,6 +970,9 @@
     document.getElementById('sup-input').addEventListener('keydown', e => { if(e.key==='Enter') sendToSupervisor(); });
 
     // --- Reviews (bottom of center pane) ---
+    // Store all review reports for detail popups
+    let reviewReports = {};
+
     async function loadReviews() {
       try {
         const r = await fetch(`/api/sessions/${pid}/supervisor/reviews`);
@@ -977,73 +980,103 @@
         const container = document.getElementById('reviews-content');
         const timestamp = document.getElementById('review-timestamp');
 
-        if (!data.combined && Object.keys(data.reviews||{}).length === 0) {
-          container.innerHTML = '<div class="sup-empty">no reviews yet</div>';
+        if (!data.categories || data.categories.length === 0) {
+          container.innerHTML = '<div class="sup-empty">no reviews yet — ask the supervisor to run a review</div>';
           timestamp.textContent = '';
           return;
         }
 
-        if (data.combined?.reviewedAt) {
-          const t = typeof data.combined.reviewedAt === 'string' ? data.combined.reviewedAt : new Date(data.combined.reviewedAt).toISOString();
-          timestamp.textContent = formatTime(t);
+        // Store reports for detail popups
+        reviewReports = {};
+        for (const cat of data.categories) {
+          reviewReports[cat.category] = cat.report;
         }
 
-        const review = data.combined?.review || data.reviews;
-        if (!review) { container.innerHTML = '<div class="sup-empty">no reviews yet</div>'; return; }
+        // Show latest timestamp
+        const latest = data.categories.reduce((a, b) => (a.timestamp > b.timestamp ? a : b));
+        if (latest.timestamp) timestamp.textContent = formatTime(latest.timestamp);
 
-        currentReviewData = review;
         let html = '';
-        for (const [key, label] of Object.entries(REVIEW_LABELS)) {
-          const item = review[key];
-          if (!item) continue;
-          const st = item.status || 'ok';
+        for (const cat of data.categories) {
+          const st = cat.status || 'ok';
           const icon = REVIEW_ICONS[st] || '?';
-          const sum = item.summary || (st==='ok'?'No issues':'See findings');
-          const fc = (item.findings||[]).length;
-          html += `<div class="sup-review-item ${st}" onclick="openReviewModal('${key}','${label}')">
+          const fc = cat.report?.findings?.length || 0;
+          const label = cat.category.toUpperCase().replace(/-/g, ' ');
+          html += `<div class="sup-review-item ${st}" data-cat="${escapeHtml(cat.category)}">
             <span class="sup-review-icon ${st}">${icon}</span>
             <span class="sup-review-label">${label}</span>
-            <span class="sup-review-detail">${escapeHtml(sum)}${fc?' ('+fc+')':''}</span>
+            <span class="sup-review-detail">${escapeHtml(cat.summary)}${fc?' ('+fc+')':''}</span>
           </div>`;
         }
-        container.innerHTML = html || '<div class="sup-empty">no reviews yet</div>';
+        container.innerHTML = html;
+
+        // Attach click handlers
+        container.querySelectorAll('.sup-review-item').forEach(el => {
+          el.addEventListener('click', () => openReportModal(el.dataset.cat));
+        });
       } catch {
         document.getElementById('reviews-content').innerHTML = '<div class="sup-empty">no reviews yet</div>';
       }
     }
 
-    // --- Review Modal ---
-    function openReviewModal(key, label) {
-      if (!currentReviewData) return;
-      const item = currentReviewData[key];
-      if (!item) return;
-      const st = item.status||'ok';
-      const icon = REVIEW_ICONS[st]||'?';
+    // --- Report Detail Modal ---
+    function openReportModal(category) {
+      const report = reviewReports[category];
+      if (!report) return;
+
+      const st = report.status || 'ok';
+      const icon = REVIEW_ICONS[st] || '?';
+      const label = category.toUpperCase().replace(/-/g, ' ');
       const modal = document.getElementById('review-modal');
       document.getElementById('rm-title').innerHTML = `<span class="sup-review-icon ${st}" style="font-size:14px">${icon}</span><span>${label}</span>`;
 
-      let html = `<div class="rm-section"><div class="rm-section-title">Summary</div><div class="rm-summary">${escapeHtml(item.summary||'No summary')}</div></div>`;
+      let html = '';
 
-      if (item.methodology) {
-        const m = item.methodology;
-        html += `<div class="rm-section"><div class="rm-section-title">What was checked</div>`;
-        if (m.criteria) html += `<div class="rm-method-row"><div class="rm-method-label">Criteria</div><div class="rm-method-value">${escapeHtml(m.criteria)}</div></div>`;
-        if (m.baseline) html += `<div class="rm-method-row"><div class="rm-method-label">Compared to</div><div class="rm-method-value">${escapeHtml(m.baseline)}</div></div>`;
-        if (m.filesChecked?.length) html += `<div class="rm-method-row"><div class="rm-method-label">Files</div><div class="rm-method-value">${m.filesChecked.map(f=>`<span class="file-tag">${escapeHtml(f)}</span>`).join('')}</div></div>`;
+      // Summary
+      html += `<div class="rm-section"><div class="rm-section-title">Summary</div><div class="rm-summary">${escapeHtml(report.summary || 'No summary')}</div></div>`;
+
+      // Metadata (whatever the report provides)
+      const meta = [];
+      if (report.runType) meta.push(['Run type', report.runType]);
+      if (report.language) meta.push(['Language', report.language]);
+      if (report.framework) meta.push(['Framework', report.framework]);
+      if (report.anchor?.commitHash) meta.push(['Anchor', report.anchor.commitHash.slice(0, 7)]);
+      if (report.filesAnalysed?.length) meta.push(['Files', report.filesAnalysed.map(f => `<span class="file-tag">${escapeHtml(f)}</span>`).join('')]);
+
+      if (meta.length) {
+        html += `<div class="rm-section"><div class="rm-section-title">Details</div>`;
+        for (const [k, v] of meta) {
+          html += `<div class="rm-method-row"><div class="rm-method-label">${k}</div><div class="rm-method-value">${v}</div></div>`;
+        }
         html += `</div>`;
       }
 
-      html += `<div class="rm-section"><div class="rm-section-title">Findings (${(item.findings||[]).length})</div>`;
-      if (!item.findings?.length) {
+      // Findings
+      const findings = report.findings || [];
+      html += `<div class="rm-section"><div class="rm-section-title">Findings (${findings.length})</div>`;
+      if (findings.length === 0) {
         html += `<div class="rm-no-findings">No issues found</div>`;
       } else {
-        for (const f of item.findings) {
-          const sev = f.severity||'low';
+        for (const f of findings) {
+          const sev = f.severity || 'low';
+          const loc = f.location || f.file || '';
+          const locStr = typeof loc === 'object' ? `${loc.file || ''}:${loc.line || ''}` : loc;
+          const lineStr = f.line ? `${f.file || ''}:${f.line}` : locStr;
+
           html += `<div class="rm-finding ${sev}">
-            <div class="rm-finding-head"><span class="rm-finding-severity">${sev}</span>${f.location?`<span class="rm-finding-location">${escapeHtml(f.location)}</span>`:''}</div>
-            <div class="rm-finding-desc">${escapeHtml(f.description||'')}</div>
-            ${f.suggestion?`<div class="rm-finding-suggestion">→ ${escapeHtml(f.suggestion)}</div>`:''}
-            ${f.evidence?`<div class="rm-finding-evidence">${escapeHtml(f.evidence)}</div>`:''}
+            <div class="rm-finding-head">
+              <span class="rm-finding-severity">${sev}</span>
+              ${f.confidence ? `<span style="font-size:8px;color:var(--text-dim);border:1px solid var(--border);padding:1px 4px;letter-spacing:1px;">CONF: ${f.confidence}</span>` : ''}
+              ${f.impact ? `<span style="font-size:8px;color:var(--text-dim);border:1px solid var(--border);padding:1px 4px;letter-spacing:1px;">IMPACT: ${f.impact}</span>` : ''}
+              ${lineStr ? `<span class="rm-finding-location">${escapeHtml(lineStr)}</span>` : ''}
+            </div>
+            ${f.title ? `<div style="font-size:11px;color:var(--text-bright);margin-bottom:3px;font-weight:500;">${escapeHtml(f.title)}</div>` : ''}
+            <div class="rm-finding-desc">${escapeHtml(f.description || '')}</div>
+            ${f.impact && typeof f.impact === 'string' && f.impact.length > 10 ? `<div style="font-size:9px;color:var(--amber-dim);margin-bottom:3px;">Impact: ${escapeHtml(f.impact)}</div>` : ''}
+            ${f.suggestion ? `<div class="rm-finding-suggestion">→ ${escapeHtml(f.suggestion)}</div>` : ''}
+            ${f.evidence ? `<div class="rm-finding-evidence">${escapeHtml(f.evidence)}</div>` : ''}
+            ${f.discrepancy ? `<div style="font-size:10px;color:var(--red-dim);margin-top:3px;">${escapeHtml(f.discrepancy)}</div>` : ''}
+            ${f.tags?.length ? `<div style="margin-top:3px;">${f.tags.map(t => `<span style="font-size:8px;padding:1px 4px;background:var(--bg);border:1px solid var(--border);color:var(--text-dim);margin-right:2px;">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
           </div>`;
         }
       }
