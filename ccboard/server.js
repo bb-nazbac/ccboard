@@ -1703,24 +1703,6 @@ app.get("/api/sessions/:pid/supervisor/reviews", async (req, res) => {
     }
   } catch {}
 
-  // Also check old-style .ccboard/*.json files for backwards compat
-  const ccboardDir = join(session.cwd, ".ccboard");
-  for (const cat of ["codeQuality", "security", "scalability", "contextDrift"]) {
-    try {
-      const raw = await readFile(join(ccboardDir, `${cat}.json`), "utf-8");
-      const report = JSON.parse(raw);
-      // Only add if not already in categories from reports/
-      if (!categories.find((c) => c.category === cat)) {
-        categories.push({
-          category: cat,
-          status: report.status || "ok",
-          summary: report.summary || "No summary",
-          timestamp: report.timestamp || null,
-          report,
-        });
-      }
-    } catch {}
-  }
 
   res.json({ categories });
 });
