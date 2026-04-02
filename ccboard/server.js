@@ -659,6 +659,24 @@ app.get("/api/sessions/:pid/files", async (req, res) => {
   }
 });
 
+// Session git diff (for /diff command)
+app.get("/api/sessions/:pid/diff", async (req, res) => {
+  const sessions = await getSessions();
+  const session = sessions.find((s) => s.pid === Number(req.params.pid));
+  if (!session) return res.status(404).json({ error: "session not found" });
+
+  let diff = "";
+  let staged = "";
+  try {
+    diff = execSync("git diff", { cwd: session.cwd, encoding: "utf-8", timeout: 10000 }).trim();
+  } catch {}
+  try {
+    staged = execSync("git diff --staged", { cwd: session.cwd, encoding: "utf-8", timeout: 10000 }).trim();
+  } catch {}
+
+  res.json({ diff, staged });
+});
+
 // Session detail: all actions grouped by turn
 app.get("/api/sessions/:pid/actions", async (req, res) => {
   const sessions = await getSessions();

@@ -511,6 +511,77 @@
     .send-status { font-size: 9px; color: var(--green-dim); margin-top: 2px; min-height: 12px; }
     .send-status.error { color: var(--red-dim); }
 
+    /* Slash command autocomplete */
+    .slash-menu {
+      position: absolute;
+      bottom: 100%;
+      left: 0;
+      right: 0;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-bottom: none;
+      max-height: 250px;
+      overflow-y: auto;
+      display: none;
+      z-index: 50;
+    }
+
+    .slash-menu.open { display: block; }
+
+    .slash-item {
+      padding: 6px 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      cursor: pointer;
+      font-size: 11px;
+    }
+
+    .slash-item:hover, .slash-item.selected {
+      background: var(--bg-card-hover);
+    }
+
+    .slash-cmd { color: var(--green); font-family: 'Share Tech Mono', monospace; }
+    .slash-desc { color: var(--text-dim); font-size: 9px; }
+
+    /* Send area — relative for slash menu positioning */
+    .send-area { position: relative; }
+
+    /* Status bar at bottom of pane */
+    .pane-status-bar {
+      flex-shrink: 0;
+      padding: 3px 10px;
+      font-size: 8px;
+      color: var(--text-dim);
+      letter-spacing: 1px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-top: 1px solid #111;
+      background: var(--bg);
+    }
+
+    .pane-status-bar .shortcut {
+      color: var(--text-dim);
+      border: 1px solid #1a1a1a;
+      padding: 0 3px;
+      font-size: 7px;
+      margin-right: 2px;
+    }
+
+    /* Tool call indicator */
+    .tool-indicator {
+      font-size: 9px;
+      color: var(--cyan-dim);
+      padding: 3px 8px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .tool-indicator .cursor { width: 4px; height: 9px; }
+
     /* === Review Detail Modal === */
 
     .review-modal-overlay {
@@ -603,9 +674,11 @@
             <div class="sup-empty">loading supervisor<span class="cursor"></span></div>
           </div>
         </div>
+        <div id="sup-tool-indicator" class="tool-indicator" style="display:none"></div>
         <div class="send-area" id="sup-send-area">
+          <div class="slash-menu" id="sup-slash-menu"></div>
           <div class="send-bar">
-            <input type="text" class="send-input" id="sup-input" placeholder="Talk to supervisor..." />
+            <input type="text" class="send-input" id="sup-input" placeholder="/ for commands, or type a message..." />
             <button class="send-btn" id="sup-send-btn">SEND</button>
           </div>
           <div class="send-status" id="sup-send-status"></div>
@@ -827,7 +900,9 @@
       if (s?.status === 'waiting' && !s?.managed) ph = 'Launch via ccboard to send';
       if (canSend) ph = 'Type a message...';
 
+      if (canSend) ph = '/ for commands, or type a message...';
       document.getElementById('send-area').innerHTML = `
+        <div class="slash-menu" id="agent-slash-menu"></div>
         <div class="send-bar">
           <input type="text" class="send-input" id="send-input" placeholder="${ph}" ${canSend?'':'disabled'} />
           <button class="send-btn" id="send-btn" ${canSend?'':'disabled'}>SEND</button>
@@ -838,21 +913,24 @@
       const btn = document.getElementById('send-btn');
       const status = document.getElementById('send-status');
 
-      async function send() {
-        const text = input.value.trim();
-        if (!text) return;
-        btn.disabled = true;
-        status.textContent = 'sending...';
-        try {
-          const r = await fetch(`/api/sessions/${pid}/send`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({message:text}) });
-          const d = await r.json();
-          if (d.ok) { status.textContent='sent'; input.value=''; input.focus(); setTimeout(()=>{loadGraph();loadMessages();},4000); }
-          else { status.textContent=d.error; status.className='send-status error'; }
-        } catch(e) { status.textContent=e.message; status.className='send-status error'; }
-        btn.disabled = false;
-      }
-      btn?.addEventListener('click', send);
-      input?.addEventListener('keydown', e => { if(e.key==='Enter') send(); });
+      btn?.addEventListener('click', () => sendToAgent());
+      input?.addEventListener('keydown', e => { if(e.key==='Enter' && !document.querySelector('#agent-slash-menu.open')) sendToAgent(); });
+    }
+
+    async function sendToAgent(messageOverride) {
+      const input = document.getElementById('send-input');
+      const status = document.getElementById('send-status');
+      const text = messageOverride || (input ? input.value.trim() : '');
+      if (!text) return;
+      if (input) input.disabled = true;
+      if (status) status.textContent = 'sending...';
+      try {
+        const r = await fetch(`/api/sessions/${pid}/send`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({message:text}) });
+        const d = await r.json();
+        if (d.ok) { if (status) status.textContent='sent'; if (input) { input.value=''; input.focus(); } setTimeout(()=>{loadGraph();loadMessages();},4000); }
+        else { if (status) { status.textContent=d.error; status.className='send-status error'; } }
+      } catch(e) { if (status) { status.textContent=e.message; status.className='send-status error'; } }
+      if (input) input.disabled = false;
     }
 
     // --- Supervisor Chat (left pane) ---
@@ -944,10 +1022,10 @@
       setTimeout(loadSupervisorChat, 2000);
     }
 
-    async function sendToSupervisor() {
+    async function sendToSupervisor(messageOverride) {
       const input = document.getElementById('sup-input');
       const status = document.getElementById('sup-send-status');
-      const text = input.value.trim();
+      const text = messageOverride || input.value.trim();
       if (!text) return;
 
       input.disabled = true;
@@ -966,8 +1044,8 @@
       input.focus();
     }
 
-    document.getElementById('sup-send-btn').addEventListener('click', sendToSupervisor);
-    document.getElementById('sup-input').addEventListener('keydown', e => { if(e.key==='Enter') sendToSupervisor(); });
+    document.getElementById('sup-send-btn').addEventListener('click', () => sendToSupervisor());
+    document.getElementById('sup-input').addEventListener('keydown', e => { if(e.key==='Enter' && !document.querySelector('#sup-slash-menu.open')) sendToSupervisor(); });
 
     // --- Reviews (bottom of center pane) ---
     // Store all review reports for detail popups
@@ -1089,6 +1167,191 @@
     document.getElementById('rm-close').addEventListener('click', () => document.getElementById('review-modal').classList.remove('open'));
     document.getElementById('review-modal').addEventListener('click', e => { if(e.target===e.currentTarget) e.currentTarget.classList.remove('open'); });
     document.addEventListener('keydown', e => { if(e.key==='Escape') document.getElementById('review-modal').classList.remove('open'); });
+
+    // --- Diff popup (for /diff command) ---
+    async function showDiffPopup() {
+      try {
+        // We need a server endpoint for this — use the files endpoint's cwd
+        const r = await fetch(`/api/sessions/${pid}/diff`);
+        const data = await r.json();
+
+        const modal = document.getElementById('review-modal');
+        document.getElementById('rm-title').innerHTML = '<span style="color:var(--cyan)">⎿</span><span>GIT DIFF</span>';
+        document.getElementById('rm-body').innerHTML = `
+          <div class="rm-section">
+            <div class="rm-section-title">Uncommitted changes</div>
+            <pre style="background:var(--bg);border:1px solid var(--border);padding:10px;font-size:10px;color:var(--text);white-space:pre-wrap;word-break:break-all;max-height:60vh;overflow-y:auto;font-family:'JetBrains Mono','Share Tech Mono',monospace;">${escapeHtml(data.diff || 'No uncommitted changes')}</pre>
+          </div>
+          ${data.staged ? `<div class="rm-section">
+            <div class="rm-section-title">Staged changes</div>
+            <pre style="background:var(--bg);border:1px solid var(--border);padding:10px;font-size:10px;color:var(--text);white-space:pre-wrap;word-break:break-all;max-height:30vh;overflow-y:auto;font-family:'JetBrains Mono','Share Tech Mono',monospace;">${escapeHtml(data.staged)}</pre>
+          </div>` : ''}`;
+        modal.classList.add('open');
+      } catch (e) {
+        console.error('diff failed:', e);
+      }
+    }
+
+    // --- Slash commands ---
+
+    const SUP_COMMANDS = [
+      // Analysis
+      { cmd: '/review', desc: 'Run all 6 analysis subagents', message: 'run a review' },
+      { cmd: '/micro', desc: 'MICRO — code behaviour analysis', message: 'run micro analysis' },
+      { cmd: '/macro', desc: 'MACRO — architecture & design analysis', message: 'run macro analysis' },
+      { cmd: '/10th-man', desc: '10TH MAN — adversarial micro + macro', message: 'run 10th man micro and 10th man macro analyses' },
+      { cmd: '/cc-failures', desc: 'Track agent said vs did', message: 'run cc-failures analysis' },
+      { cmd: '/human-failures', desc: 'Track human behaviour patterns', message: 'run human-failures analysis' },
+      // Custom
+      { cmd: '/agent', desc: 'Spawn custom subagent — /agent "prompt"', message: null },
+      // Session
+      { cmd: '/status', desc: 'Show supervisor context and status', message: 'show your current context usage and status' },
+      { cmd: '/compact', desc: 'Compact supervisor context', message: '/compact' },
+      { cmd: '/clear', desc: 'Restart supervisor with fresh context', action: 'restart-sup' },
+      { cmd: '/model', desc: 'Change supervisor model — /model sonnet', message: null, prefix: true },
+      { cmd: '/effort', desc: 'Set effort level — /effort high', message: null, prefix: true },
+      { cmd: '/plan', desc: 'Enter plan mode', message: '/plan' },
+      // Info
+      { cmd: '/diff', desc: 'Show git diff', action: 'show-diff' },
+      { cmd: '/cost', desc: 'Show token costs for this session', message: 'show token usage and estimated cost for this session' },
+    ];
+
+    const AGENT_COMMANDS = [
+      // Session control (forwarded to agent via tmux)
+      { cmd: '/compact', desc: 'Compact agent context', message: '/compact' },
+      { cmd: '/clear', desc: 'Clear agent conversation', message: '/clear' },
+      { cmd: '/model', desc: 'Change agent model — /model sonnet', message: null, prefix: true },
+      { cmd: '/effort', desc: 'Set agent effort — /effort high', message: null, prefix: true },
+      { cmd: '/plan', desc: 'Enter plan mode', message: '/plan' },
+      // Info
+      { cmd: '/diff', desc: 'Show git diff', action: 'show-diff' },
+      { cmd: '/context', desc: 'Show agent context usage', message: '/context' },
+      { cmd: '/cost', desc: 'Show agent token usage', message: '/cost' },
+      { cmd: '/status', desc: 'Show agent status', message: '/status' },
+    ];
+
+    function setupSlashMenu(inputId, menuId, commands, sendFn) {
+      // Wait for elements to exist (agent input is created dynamically)
+      const check = () => {
+        const input = document.getElementById(inputId);
+        const menu = document.getElementById(menuId);
+        if (!input || !menu) { setTimeout(check, 500); return; }
+
+        let selectedIdx = 0;
+        let filtered = [];
+        let isOpen = false;
+
+        function render() {
+          if (!isOpen || filtered.length === 0) { menu.classList.remove('open'); return; }
+          menu.classList.add('open');
+          menu.innerHTML = filtered.map((c, i) =>
+            `<div class="slash-item${i === selectedIdx ? ' selected' : ''}" data-idx="${i}">
+              <span class="slash-cmd">${c.cmd}</span>
+              <span class="slash-desc">${c.desc}</span>
+            </div>`
+          ).join('');
+          menu.querySelectorAll('.slash-item').forEach(el => {
+            el.addEventListener('mousedown', (e) => {
+              e.preventDefault();
+              execute(Number(el.dataset.idx));
+            });
+          });
+        }
+
+        function filter(val) {
+          if (!val.startsWith('/')) { isOpen = false; render(); return; }
+          const q = val.toLowerCase();
+          filtered = commands.filter(c => c.cmd.startsWith(q) || c.cmd.includes(q.slice(1)));
+          if (filtered.length === 0 && val === '/') filtered = commands;
+          selectedIdx = 0;
+          isOpen = true;
+          render();
+        }
+
+        function execute(idx) {
+          const cmd = filtered[idx];
+          if (!cmd) return;
+          isOpen = false;
+          render();
+
+          // Actions
+          if (cmd.action === 'restart-sup') {
+            input.value = '';
+            fetch(`/api/sessions/${pid}/supervisor/stop`, { method: 'POST' }).then(() => {
+              setTimeout(() => location.reload(), 2000);
+            });
+            return;
+          }
+
+          if (cmd.action === 'show-diff') {
+            input.value = '';
+            showDiffPopup();
+            return;
+          }
+
+          // Prefix commands — need an argument after the command
+          if (cmd.prefix) {
+            const val = input.value.trim();
+            const parts = val.split(/\s+/);
+            if (parts.length >= 2) {
+              // User typed the full command with argument, send it
+              input.value = '';
+              sendFn(val);
+            } else {
+              // Tab-completed just the command name, let user type the argument
+              input.value = cmd.cmd + ' ';
+              input.focus();
+              input.setSelectionRange(input.value.length, input.value.length);
+            }
+            return;
+          }
+
+          // Custom agent
+          if (cmd.cmd === '/agent') {
+            const val = input.value;
+            const match = val.match(/^\/agent\s+["']?(.+?)["']?\s*$/);
+            if (match) {
+              input.value = '';
+              sendFn('spawn a custom read-only Agent subagent with this prompt: ' + match[1] + '. Write its output to .ccboard/reports/custom-' + Date.now() + '/latest.json with the standard 4 fields (category, status, summary, timestamp) plus whatever findings it produces.');
+            } else {
+              input.value = '/agent "';
+              input.focus();
+              input.setSelectionRange(input.value.length, input.value.length);
+            }
+            return;
+          }
+
+          // Simple message commands
+          if (cmd.message) {
+            input.value = '';
+            sendFn(cmd.message);
+          }
+        }
+
+        input.addEventListener('input', () => filter(input.value));
+
+        input.addEventListener('keydown', (e) => {
+          if (!isOpen) return;
+          if (e.key === 'ArrowDown') { e.preventDefault(); selectedIdx = Math.min(selectedIdx + 1, filtered.length - 1); render(); return; }
+          if (e.key === 'ArrowUp') { e.preventDefault(); selectedIdx = Math.max(selectedIdx - 1, 0); render(); return; }
+          if (e.key === 'Tab' || (e.key === 'Enter' && isOpen && filtered.length > 0)) {
+            e.preventDefault();
+            // Tab-complete the command
+            if (e.key === 'Tab') {
+              input.value = filtered[selectedIdx].cmd + ' ';
+              filter(input.value);
+            } else {
+              execute(selectedIdx);
+            }
+            return;
+          }
+          if (e.key === 'Escape') { isOpen = false; render(); e.preventDefault(); return; }
+        });
+
+        input.addEventListener('blur', () => { setTimeout(() => { isOpen = false; render(); }, 200); });
+      };
+      check();
+    }
 
     // --- Real-time SSE streams ---
 
@@ -1227,6 +1490,10 @@
       connectAgentStream();
       connectSupervisorStream();
       connectPaneStream();
+
+      // Slash commands
+      setupSlashMenu('sup-input', 'sup-slash-menu', SUP_COMMANDS, sendToSupervisor);
+      setupSlashMenu('send-input', 'agent-slash-menu', AGENT_COMMANDS, sendToAgent);
     }
     init();
 
