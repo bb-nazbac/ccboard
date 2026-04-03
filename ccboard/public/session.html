@@ -1019,7 +1019,7 @@
 
     async function startSupervisor() {
       await fetch(`/api/sessions/${pid}/supervisor/start`, {method:'POST'});
-      setTimeout(loadSupervisorChat, 2000);
+      // SSE handles real-time updates
     }
 
     async function sendToSupervisor(messageOverride) {
@@ -1037,7 +1037,7 @@
           body: JSON.stringify({message: text}),
         });
         const d = await r.json();
-        if (d.ok) { input.value = ''; status.textContent = ''; setTimeout(loadSupervisorChat, 2000); }
+        if (d.ok) { input.value = ''; status.textContent = ''; }
         else { status.textContent = d.error; status.className = 'send-status error'; }
       } catch(e) { status.textContent = e.message; status.className = 'send-status error'; }
       input.disabled = false;
@@ -1323,8 +1323,10 @@
 
           // Simple message commands
           if (cmd.message) {
+            const msg = cmd.message;
             input.value = '';
-            sendFn(cmd.message);
+            // Use setTimeout to ensure DOM is settled before sending
+            setTimeout(() => sendFn(msg), 50);
           }
         }
 
@@ -1355,9 +1357,18 @@
 
     // --- Real-time SSE streams ---
 
+    // Track last appended message per scroll area to prevent duplicates
+    const lastAppended = {};
+
     function appendMessage(scrollId, role, text, timestamp, roleLabel) {
       const scroll = document.getElementById(scrollId);
       if (!scroll) return;
+
+      // Deduplicate: skip if same text+timestamp was just appended
+      const key = scrollId + '|' + role + '|' + (timestamp || '') + '|' + (text || '').slice(0, 100);
+      if (lastAppended[scrollId] === key) return;
+      lastAppended[scrollId] = key;
+
       const div = document.createElement('div');
       div.className = 'message ' + role;
       div.innerHTML = `

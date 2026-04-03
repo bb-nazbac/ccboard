@@ -14,10 +14,7 @@ const CLAUDE_DIR = join(homedir(), ".claude");
 const SESSIONS_DIR = join(CLAUDE_DIR, "sessions");
 const PROJECTS_DIR = join(CLAUDE_DIR, "projects");
 
-// Cache: PID → resolved JSONL path
-// Only caches exact sessionId matches — fallback resolutions are not cached
-// because they may pick up the wrong file (e.g. supervisor JSONL)
-const jsonlPathCache = new Map();
+// No JSONL path cache — always resolve fresh to handle session changes
 
 // Encode a cwd path to the project directory name Claude uses
 // /Users/bahaa/Documents/foo_bar baz → -Users-bahaa-Documents-foo-bar-baz
@@ -401,37 +398,80 @@ async function findLargestJsonl(projectDir) {
   return largest ? join(dirPath, largest) : null;
 }
 
-// Resolve and cache JSONL path for a PID
-async function resolveJsonlForPid(pid, cwd, sessionId) {
-  if (jsonlPathCache.has(pid)) return jsonlPathCache.get(pid);
-
+// Resolve the ACTIVE JSONL (what the agent is writing to right now)
+async function resolveActiveJsonl(pid, cwd, sessionId) {
   const projectDir = cwdToProjectDir(cwd);
 
   // 1. Try exact sessionId match
   const exactPath = join(PROJECTS_DIR, projectDir, `${sessionId}.jsonl`);
   try {
     await stat(exactPath);
-    jsonlPathCache.set(pid, exactPath);
     return exactPath;
   } catch {}
 
-  // 2. Check .ccboard/session.json for the stored agent sessionId
+  // 2. Most recently modified (excluding supervisors) — the one being written to
+  return await findLatestJsonl(projectDir);
+}
+
+// Resolve ALL relevant JONLs for full history (active + pairing + largest)
+async function resolveHistoryJsonls(pid, cwd, sessionId) {
+  const projectDir = cwdToProjectDir(cwd);
+  const supIds = await getSupervisorSessionIds();
+  const paths = new Set();
+
+  // Active JSONL
+  const active = await resolveActiveJsonl(pid, cwd, sessionId);
+  if (active) paths.add(active);
+
+  // Pairing file JSONL (may be a different, older session)
   try {
     const pairing = await readSessionPairing(cwd);
     if (pairing?.agentSessionId) {
       const pairingPath = join(PROJECTS_DIR, projectDir, `${pairing.agentSessionId}.jsonl`);
       await stat(pairingPath);
-      jsonlPathCache.set(pid, pairingPath);
-      return pairingPath;
+      if (!supIds.has(pairing.agentSessionId)) paths.add(pairingPath);
     }
   } catch {}
 
-  // 3. Fallback: largest JSONL (excluding supervisors)
+  // Also include the largest non-supervisor JSONL (the main conversation)
   const largest = await findLargestJsonl(projectDir);
-  if (largest) return largest;
+  if (largest) paths.add(largest);
 
-  // 4. Last resort
-  return await findLatestJsonl(projectDir);
+  return [...paths];
+}
+
+// Read full conversation from multiple JONLs (deduplicates by uuid)
+async function readFullConversationMulti(jsonlPaths) {
+  const seen = new Set();
+  const entries = [];
+  for (const p of jsonlPaths) {
+    try {
+      const raw = await readFile(p, "utf-8");
+      for (const line of raw.split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          const entry = JSON.parse(line);
+          const uuid = entry.uuid || entry.requestId || line.slice(0, 50);
+          if (!seen.has(uuid)) {
+            seen.add(uuid);
+            entries.push(entry);
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+  // Sort by timestamp
+  entries.sort((a, b) => {
+    const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+    const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+    return ta - tb;
+  });
+  return entries;
+}
+
+// Backwards compat alias
+async function resolveJsonlForPid(pid, cwd, sessionId) {
+  return resolveActiveJsonl(pid, cwd, sessionId);
 }
 
 // Read full JSONL and parse into structured conversation data
@@ -563,7 +603,7 @@ function extractMessageChain(entries) {
       if (!text.trim() || isSupervisorNoise(text)) continue;
       messages.push({
         role: "human",
-        text: text.slice(0, 5000),
+        text: text,
         timestamp: e.timestamp,
       });
     }
@@ -578,7 +618,7 @@ function extractMessageChain(entries) {
       if (textParts.length > 0) {
         messages.push({
           role: "assistant",
-          text: textParts.join("\n").slice(0, 5000),
+          text: textParts.join("\n"),
           timestamp: e.timestamp,
         });
       }
@@ -677,30 +717,30 @@ app.get("/api/sessions/:pid/diff", async (req, res) => {
   res.json({ diff, staged });
 });
 
-// Session detail: all actions grouped by turn
+// Session detail: all actions grouped by turn (reads full history)
 app.get("/api/sessions/:pid/actions", async (req, res) => {
   const sessions = await getSessions();
   const session = sessions.find((s) => s.pid === Number(req.params.pid));
   if (!session) return res.status(404).json({ error: "session not found" });
 
-  const jsonlPath = await resolveJsonlForPid(session.pid, session.cwd, session.sessionId);
-  if (!jsonlPath) return res.json([]);
+  const jsonlPaths = await resolveHistoryJsonls(session.pid, session.cwd, session.sessionId);
+  if (jsonlPaths.length === 0) return res.json([]);
 
-  const entries = await readFullConversation(jsonlPath);
+  const entries = await readFullConversationMulti(jsonlPaths);
   const turns = extractActionTurns(entries);
   res.json(turns);
 });
 
-// Session detail: message chain
+// Session detail: message chain (reads full history)
 app.get("/api/sessions/:pid/messages", async (req, res) => {
   const sessions = await getSessions();
   const session = sessions.find((s) => s.pid === Number(req.params.pid));
   if (!session) return res.status(404).json({ error: "session not found" });
 
-  const jsonlPath = await resolveJsonlForPid(session.pid, session.cwd, session.sessionId);
-  if (!jsonlPath) return res.json([]);
+  const jsonlPaths = await resolveHistoryJsonls(session.pid, session.cwd, session.sessionId);
+  if (jsonlPaths.length === 0) return res.json([]);
 
-  const entries = await readFullConversation(jsonlPath);
+  const entries = await readFullConversationMulti(jsonlPaths);
   const messages = extractMessageChain(entries);
   res.json(messages);
 });
@@ -946,8 +986,7 @@ Then introduce yourself and tell me what you see in this project. Read the recen
           results: null,
         });
 
-        // Also cache the agent's JSONL path
-        if (agentJsonlPath) jsonlPathCache.set(agentPanePid, agentJsonlPath);
+        // JSONL path resolved dynamically — no caching needed
       } catch {}
     }, 10000);
 
@@ -1716,7 +1755,7 @@ app.get("/api/sessions/:pid/supervisor/messages", async (req, res) => {
       if (entry.type === "user" && entry.promptId && !entry.sourceToolAssistantUUID) {
         const text = extractHumanText(entry);
         if (text.trim()) {
-          messages.push({ role: "human", text: text.slice(0, 5000), timestamp: entry.timestamp });
+          messages.push({ role: "human", text: text, timestamp: entry.timestamp });
         }
       }
 
@@ -1727,7 +1766,7 @@ app.get("/api/sessions/:pid/supervisor/messages", async (req, res) => {
           .filter((c) => c.type === "text" && c.text?.trim())
           .map((c) => c.text);
         if (textParts.length > 0) {
-          messages.push({ role: "assistant", text: textParts.join("\n").slice(0, 5000), timestamp: entry.timestamp });
+          messages.push({ role: "assistant", text: textParts.join("\n"), timestamp: entry.timestamp });
         }
       }
     } catch {}
@@ -1818,6 +1857,12 @@ app.get("/api/sessions/:pid/stream", async (req, res) => {
   if (!session) return res.status(404).json({ error: "session not found" });
 
   const jsonlPath = await resolveJsonlForPid(session.pid, session.cwd, session.sessionId);
+  console.log(`[SSE stream] pid=${pid} jsonlPath=${jsonlPath}`);
+
+  if (!jsonlPath) {
+    res.status(404).json({ error: "JSONL not found" });
+    return;
+  }
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -1855,7 +1900,7 @@ app.get("/api/sessions/:pid/stream", async (req, res) => {
               ? entry.message.content
               : "";
             if (text.trim() && !text.includes("pair-programming supervisor")) {
-              res.write(`data: ${JSON.stringify({ type: "message", role: "human", text: text.slice(0, 5000), timestamp: entry.timestamp })}\n\n`);
+              res.write(`data: ${JSON.stringify({ type: "message", role: "human", text: text, timestamp: entry.timestamp })}\n\n`);
             }
           }
           if (entry.type === "assistant") {
@@ -1863,7 +1908,7 @@ app.get("/api/sessions/:pid/stream", async (req, res) => {
             if (Array.isArray(content)) {
               const textParts = content.filter((c) => c.type === "text" && c.text?.trim()).map((c) => c.text);
               if (textParts.length > 0) {
-                res.write(`data: ${JSON.stringify({ type: "message", role: "assistant", text: textParts.join("\n").slice(0, 5000), timestamp: entry.timestamp })}\n\n`);
+                res.write(`data: ${JSON.stringify({ type: "message", role: "assistant", text: textParts.join("\n"), timestamp: entry.timestamp })}\n\n`);
               }
             }
           }
@@ -1929,7 +1974,7 @@ app.get("/api/sessions/:pid/supervisor/stream", async (req, res) => {
           if (entry.type === "user" && entry.promptId && !entry.sourceToolAssistantUUID) {
             const text = typeof entry.message?.content === "string" ? entry.message.content : "";
             if (text.trim()) {
-              res.write(`data: ${JSON.stringify({ type: "message", role: "human", text: text.slice(0, 5000), timestamp: entry.timestamp })}\n\n`);
+              res.write(`data: ${JSON.stringify({ type: "message", role: "human", text: text, timestamp: entry.timestamp })}\n\n`);
             }
           }
           if (entry.type === "assistant") {
@@ -1937,7 +1982,7 @@ app.get("/api/sessions/:pid/supervisor/stream", async (req, res) => {
             if (Array.isArray(content)) {
               const textParts = content.filter((c) => c.type === "text" && c.text?.trim()).map((c) => c.text);
               if (textParts.length > 0) {
-                res.write(`data: ${JSON.stringify({ type: "message", role: "assistant", text: textParts.join("\n").slice(0, 5000), timestamp: entry.timestamp })}\n\n`);
+                res.write(`data: ${JSON.stringify({ type: "message", role: "assistant", text: textParts.join("\n"), timestamp: entry.timestamp })}\n\n`);
               }
             }
           }
