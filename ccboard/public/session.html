@@ -260,6 +260,16 @@
     }
     .sup-review-item:hover { background: var(--bg-card-hover); }
 
+    .sup-review-item.verdict-row {
+      background: #0a0f1a;
+      border-left: 3px solid #4488cc;
+      margin-bottom: 4px;
+      padding: 7px 8px;
+    }
+    .sup-review-item.verdict-row .sup-review-label { color: #6699cc; font-weight: 500; min-width: 110px; }
+    .sup-review-item.verdict-row .sup-review-detail { color: var(--text); }
+    .sup-review-item.verdict-row .sup-review-icon { color: #6699cc; }
+
     .sup-review-icon { font-size: 11px; }
     .sup-review-icon.ok { color: var(--green-dim); }
     .sup-review-icon.warning { color: var(--amber); }
@@ -1078,10 +1088,12 @@
         for (const cat of data.categories) {
           const st = cat.status || 'ok';
           const icon = REVIEW_ICONS[st] || '?';
-          const fc = cat.report?.findings?.length || 0;
+          const fc = cat.report?.findings?.length || cat.report?.action_items?.length || 0;
           const label = cat.category.toUpperCase().replace(/-/g, ' ');
-          html += `<div class="sup-review-item ${st}" data-cat="${escapeHtml(cat.category)}">
-            <span class="sup-review-icon ${st}">${icon}</span>
+          const isVerdict = cat.isVerdict;
+          const verdictClass = isVerdict ? ' verdict-row' : '';
+          html += `<div class="sup-review-item ${st}${verdictClass}" data-cat="${escapeHtml(cat.category)}">
+            <span class="sup-review-icon ${st}">${isVerdict ? '⚖' : icon}</span>
             <span class="sup-review-label">${label}</span>
             <span class="sup-review-detail">${escapeHtml(cat.summary)}${fc?' ('+fc+')':''}</span>
           </div>`;
@@ -1102,11 +1114,75 @@
       const report = reviewReports[category];
       if (!report) return;
 
-      const st = report.status || 'ok';
-      const icon = REVIEW_ICONS[st] || '?';
+      const st = report.status || report.overall_score || 'ok';
+      const icon = category === 'council-verdict' ? '⚖' : (REVIEW_ICONS[st] || '?');
       const label = category.toUpperCase().replace(/-/g, ' ');
       const modal = document.getElementById('review-modal');
       document.getElementById('rm-title').innerHTML = `<span class="sup-review-icon ${st}" style="font-size:14px">${icon}</span><span>${label}</span>`;
+
+      // Council verdict has a different structure — render it specially
+      if (category === 'council-verdict') {
+        let html = '';
+
+        // Executive summary
+        const execSummary = report.executive_summary || report.executiveSummary || '';
+        if (execSummary) {
+          html += `<div class="rm-section"><div class="rm-section-title">Executive Summary</div><div class="rm-summary">${escapeHtml(execSummary)}</div></div>`;
+        }
+
+        // Council scores
+        const scores = report.council_scores || report.councilMembers || {};
+        if (Object.keys(scores).length > 0) {
+          html += `<div class="rm-section"><div class="rm-section-title">Council Scores</div>`;
+          for (const [member, data] of Object.entries(scores)) {
+            const score = typeof data === 'string' ? data : (data.score || data.status || '?');
+            const topFinding = typeof data === 'object' ? (data.top_finding || data.topFinding || '') : '';
+            const scoreIcon = REVIEW_ICONS[score] || (score === 'pass' ? '✓' : score === 'warn' ? '⚠' : score === 'fail' ? '✗' : '?');
+            html += `<div style="display:flex;gap:8px;padding:4px 6px;background:var(--bg);margin-bottom:1px;align-items:baseline;">
+              <span style="font-size:11px;">${scoreIcon}</span>
+              <span style="font-size:10px;color:var(--text-bright);min-width:100px;text-transform:uppercase;letter-spacing:1px;">${member.replace(/-/g,' ')}</span>
+              <span style="font-size:10px;color:var(--text-dim);flex:1;">${escapeHtml(topFinding)}</span>
+            </div>`;
+          }
+          html += `</div>`;
+        }
+
+        // Action items
+        const actionItems = report.action_items || report.fixNow || [];
+        if (Array.isArray(actionItems) && actionItems.length > 0) {
+          html += `<div class="rm-section"><div class="rm-section-title">Action Items (${actionItems.length})</div>`;
+          for (const item of actionItems) {
+            const priority = item.priority || item.urgency || 'medium';
+            const sevColor = priority === 'critical' || priority === 'fix-now' ? 'var(--red-dim)' : priority === 'high' ? 'var(--amber-dim)' : 'var(--text-dim)';
+            html += `<div class="rm-finding" style="border-left-color:${sevColor}">
+              <div class="rm-finding-head">
+                <span class="rm-finding-severity" style="color:${sevColor};border-color:${sevColor}">${escapeHtml(priority)}</span>
+                ${item.source ? `<span style="font-size:8px;color:var(--cyan-dim)">${escapeHtml(item.source)}</span>` : ''}
+              </div>
+              <div class="rm-finding-desc">${escapeHtml(item.title || item.description || item.finding || '')}</div>
+              ${item.reason || item.productImpact ? `<div class="rm-finding-suggestion">→ ${escapeHtml(item.reason || item.productImpact || '')}</div>` : ''}
+            </div>`;
+          }
+          html += `</div>`;
+        }
+
+        // Conflicts
+        const conflicts = report.conflicts_and_resolutions || report.conflicts || [];
+        if (Array.isArray(conflicts) && conflicts.length > 0) {
+          html += `<div class="rm-section"><div class="rm-section-title">Conflicts & Resolutions (${conflicts.length})</div>`;
+          for (const c of conflicts) {
+            html += `<div style="padding:6px 8px;background:var(--bg);margin-bottom:2px;font-size:10px;">
+              <div style="color:var(--text-bright);margin-bottom:3px;">${escapeHtml(c.area || c.topic || '')}</div>
+              <div style="color:var(--text-dim);">${escapeHtml(c.resolution || c.verdict || '')}</div>
+            </div>`;
+          }
+          html += `</div>`;
+        }
+
+        document.getElementById('rm-body').innerHTML = html || '<div class="rm-no-findings">No verdict details</div>';
+        modal.classList.add('open');
+        return;
+      }
 
       let html = '';
 
