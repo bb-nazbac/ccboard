@@ -63,7 +63,7 @@ async function getSupervisorSessionIds() {
 
 // Find the most recently modified JSONL in a project directory
 // Excludes JONLs belonging to supervisor sessions
-async function findLatestJsonl(projectDir) {
+async function findLatestJsonl(projectDir, cwd) {
   const dirPath = join(PROJECTS_DIR, projectDir);
   let files;
   try {
@@ -74,13 +74,39 @@ async function findLatestJsonl(projectDir) {
   const jsonls = files.filter((f) => f.endsWith(".jsonl"));
   if (jsonls.length === 0) return null;
 
-  // Get supervisor session IDs to exclude
+  // Collect ALL supervisor session IDs to exclude:
+  // 1. From running tmux sessions
   const supIds = await getSupervisorSessionIds();
+  // 2. From the pairing file (catches old/stopped supervisors)
+  if (cwd) {
+    try {
+      const pairing = await readSessionPairing(cwd);
+      if (pairing?.supervisorSessionId) supIds.add(pairing.supervisorSessionId);
+      // Also exclude any previously known supervisor IDs
+      if (pairing?.previousSupervisorIds) {
+        for (const id of pairing.previousSupervisorIds) supIds.add(id);
+      }
+    } catch {}
+  }
+  // 3. Heuristic: check first few lines of each JSONL for supervisor markers
+  for (const f of jsonls) {
+    const sid = f.replace(".jsonl", "");
+    if (supIds.has(sid)) continue;
+    try {
+      const fh = await open(join(dirPath, f), "r");
+      const buf = Buffer.alloc(2000);
+      await fh.read(buf, 0, 2000, 0);
+      await fh.close();
+      const head = buf.toString("utf-8");
+      if (head.includes("supervising") || head.includes("SUPERVISOR") || head.includes("council") || head.includes("pair-programming supervisor")) {
+        supIds.add(sid);
+      }
+    } catch {}
+  }
 
   let latest = null;
   let latestMtime = 0;
   for (const f of jsonls) {
-    // Skip if this JSONL belongs to a supervisor
     const sessionId = f.replace(".jsonl", "");
     if (supIds.has(sessionId)) continue;
 
@@ -90,9 +116,7 @@ async function findLatestJsonl(projectDir) {
         latestMtime = info.mtimeMs;
         latest = f;
       }
-    } catch {
-      // skip
-    }
+    } catch {}
   }
   return latest ? join(dirPath, latest) : null;
 }
@@ -106,7 +130,7 @@ async function getSessionContext(cwd, sessionId) {
   try {
     await stat(jsonlPath);
   } catch {
-    jsonlPath = await findLatestJsonl(projectDir);
+    jsonlPath = await findLatestJsonl(projectDir, cwd);
     if (!jsonlPath) return null;
   }
 
@@ -409,8 +433,37 @@ async function resolveActiveJsonl(pid, cwd, sessionId) {
     return exactPath;
   } catch {}
 
-  // 2. Most recently modified (excluding supervisors) — the one being written to
-  return await findLatestJsonl(projectDir);
+  // 2. Find the JSONL that was modified most recently AND contains entries
+  //    with this session's PID or sessionId. If we can't match, just pick
+  //    the most recently modified non-supervisor file.
+  const dirPath = join(PROJECTS_DIR, projectDir);
+  let files;
+  try { files = await readdir(dirPath); } catch { return null; }
+  const jsonls = files.filter(f => f.endsWith(".jsonl"));
+
+  // Get the current supervisor's session ID to exclude
+  const currentSupId = new Set();
+  try {
+    const pairing = await readSessionPairing(cwd);
+    if (pairing?.supervisorSessionId) currentSupId.add(pairing.supervisorSessionId);
+  } catch {}
+
+  // Pick the most recently modified JSONL, excluding ONLY the current supervisor
+  let latest = null;
+  let latestMtime = 0;
+  for (const f of jsonls) {
+    const sid = f.replace(".jsonl", "");
+    if (currentSupId.has(sid)) continue;
+
+    try {
+      const info = await stat(join(dirPath, f));
+      if (info.mtimeMs > latestMtime) {
+        latestMtime = info.mtimeMs;
+        latest = f;
+      }
+    } catch {}
+  }
+  return latest ? join(dirPath, latest) : null;
 }
 
 // Resolve ALL relevant JONLs for full history (active + pairing + largest)
@@ -1027,7 +1080,6 @@ app.post("/api/sessions/:pid/send", async (req, res) => {
     writeFileSync(tmpFile, message);
     execSync(`tmux load-buffer ${tmpFile}`);
     execSync(`tmux paste-buffer -t ${tmuxSession}`);
-    await new Promise((r) => setTimeout(r, 500));
     execSync(`tmux send-keys -t ${tmuxSession} Enter`);
     unlinkSync(tmpFile);
     res.json({ ok: true });
@@ -1159,6 +1211,26 @@ CAPABILITIES — READ ONLY:
 
 PRODUCT CONTEXT:
 When the human describes the product, who uses it, what the core features are, or what matters most — write it to .ccboard/product.md immediately. This file is read by the Council Chair to prioritise findings by product impact. Update it whenever the human gives you new product context. If the file doesn't exist when a review runs, ask the human to describe the product first.
+
+TASK CONTEXT:
+When the human tells you what they're currently working on — a feature, a bug fix, a refactor, a specific area of the code — write it to .ccboard/task.md immediately. Include:
+- What the task is (one sentence)
+- Which files/directories are involved (list them)
+- What branch they're on (run git branch --show-current)
+- What matters for this task (performance? correctness? security? speed of delivery?)
+
+Update task.md whenever the task changes. If the human says "I'm now working on X", replace the previous task.
+
+SCOPED REVIEWS:
+When you run a council review and .ccboard/task.md exists:
+1. Read task.md to understand the current focus
+2. Run "git diff main...HEAD" (or the base branch) to get only the changes on this branch
+3. Also run "git diff" for uncommitted changes
+4. Tell each council member: "The engineer is working on [task]. Focus your review on these changed files and any files that import or depend on them. Evaluate whether the changes serve the stated task. Do NOT review unrelated parts of the codebase."
+5. Pass the scoped diff (not the full repo) to each council member
+6. The Council Chair should prioritise findings by relevance to the current task
+
+If .ccboard/task.md does NOT exist, run a full repo review (current behaviour).
 
 COMMUNICATING WITH THE AGENT:
 ${sendCmd}
@@ -1694,6 +1766,8 @@ app.get("/api/sessions/:pid/supervisor/messages", async (req, res) => {
     return res.json([]);
   }
 
+  const limit = parseInt(req.query.limit) || 0;
+
   // Extract human + assistant messages
   const messages = [];
   for (const line of raw.split("\n")) {
@@ -1721,7 +1795,7 @@ app.get("/api/sessions/:pid/supervisor/messages", async (req, res) => {
     } catch {}
   }
 
-  res.json(messages);
+  res.json(limit > 0 ? messages.slice(-limit) : messages);
 });
 
 // Send a message to the supervisor
@@ -1751,7 +1825,6 @@ app.post("/api/sessions/:pid/supervisor/send", async (req, res) => {
     writeFileSync(tmpFile, message);
     execSync(`tmux load-buffer ${tmpFile}`);
     execSync(`tmux paste-buffer -t ${sup.tmuxSession}`);
-    await new Promise((r) => setTimeout(r, 500));
     execSync(`tmux send-keys -t ${sup.tmuxSession} Enter`);
     unlinkSync(tmpFile);
     res.json({ ok: true });
@@ -1963,6 +2036,211 @@ app.get("/api/sessions/:pid/supervisor/stream", async (req, res) => {
   });
 });
 
+// SSE: stream agent's actions in real-time (100ms JSONL polling + 250ms pane)
+app.get("/api/sessions/:pid/action-stream", async (req, res) => {
+  const pid = Number(req.params.pid);
+  const sessions = await getSessions();
+  const session = sessions.find((s) => s.pid === pid);
+  if (!session) return res.status(404).json({ error: "session not found" });
+
+  const jsonlPath = await resolveActiveJsonl(pid, session.cwd, session.sessionId);
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  res.write('data: {"type":"connected"}\n\n');
+
+  let lastSize = 0;
+  try {
+    const info = await stat(jsonlPath);
+    lastSize = info.size;
+  } catch {}
+
+  // Fast JSONL poll: 100ms for tool calls
+  async function checkJsonl() {
+    if (!jsonlPath) return;
+    try {
+      const info = await stat(jsonlPath);
+      if (info.size <= lastSize) return;
+
+      const fh = await open(jsonlPath, "r");
+      const buf = Buffer.alloc(info.size - lastSize);
+      await fh.read(buf, 0, buf.length, lastSize);
+      await fh.close();
+      lastSize = info.size;
+
+      const lines = buf.toString("utf-8").split("\n").filter((l) => l.trim());
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+
+          // Tool use (assistant calling a tool)
+          if (entry.type === "assistant") {
+            const content = entry.message?.content;
+            if (!Array.isArray(content)) continue;
+            for (const block of content) {
+              if (block.type === "tool_use") {
+                const inp = block.input || {};
+                let detail = "";
+                switch (block.name) {
+                  case "Bash":
+                    detail = inp.description || inp.command?.slice(0, 120) || "";
+                    break;
+                  case "Read":
+                    detail = inp.file_path || "";
+                    break;
+                  case "Write":
+                    detail = inp.file_path || "";
+                    break;
+                  case "Edit":
+                    detail = inp.file_path || "";
+                    break;
+                  case "Read":
+                    detail = inp.file_path || "";
+                    break;
+                  case "Grep":
+                    detail = `/${inp.pattern || ""}/ ${inp.path || ""}`;
+                    break;
+                  case "Glob":
+                    detail = inp.pattern || "";
+                    break;
+                  case "Agent":
+                    detail = inp.description || inp.prompt?.slice(0, 80) || "";
+                    break;
+                  default:
+                    detail = block.name;
+                }
+                const evt = {
+                  type: "action",
+                  tool: block.name,
+                  detail,
+                  timestamp: entry.timestamp,
+                };
+                // Include full data for tools that have it
+                if (block.name === "Edit") {
+                  evt.filePath = inp.file_path;
+                  evt.oldString = inp.old_string?.slice(0, 2000);
+                  evt.newString = inp.new_string?.slice(0, 2000);
+                }
+                if (block.name === "Write") {
+                  evt.filePath = inp.file_path;
+                  evt.newString = inp.content?.slice(0, 2000);
+                }
+                if (block.name === "Bash") {
+                  evt.command = inp.command;
+                  evt.description = inp.description;
+                }
+                if (block.name === "Grep") {
+                  evt.pattern = inp.pattern;
+                  evt.path = inp.path;
+                }
+                if (block.name === "Read") {
+                  evt.filePath = inp.file_path;
+                }
+                res.write(`data: ${JSON.stringify(evt)}\n\n`);
+              }
+              if (block.type === "text" && block.text?.trim()) {
+                // Assistant thinking/speaking
+                res.write(`data: ${JSON.stringify({
+                  type: "thinking",
+                  text: block.text.slice(0, 500),
+                  timestamp: entry.timestamp,
+                })}\n\n`);
+              }
+            }
+          }
+
+          // Tool results are noisy — skip them. The tool_use action already shows what happened.
+        } catch {}
+      }
+    } catch {}
+  }
+
+  const jsonlInterval = setInterval(checkJsonl, 100);
+
+  // Slower pane capture for live streaming text
+  let lastPaneContent = "";
+  const tmux = session.managed ? session.tmuxSession : null;
+
+  function capturePaneState() {
+    if (!tmux) return;
+    try {
+      const pane = execSync(
+        `tmux capture-pane -t ${tmux} -p -S -15 2>/dev/null`,
+        { encoding: "utf-8" }
+      );
+
+      const lines = pane.split("\n");
+      const events = [];
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        // Skip chrome
+        if (trimmed.match(/^[─━]+$/) || trimmed.includes("bypass permissions") || trimmed.includes("Auto-update") || trimmed.includes("Tip:")) continue;
+
+        // Spinner: ✽ Optimus Priming… (3m 38s · ↓ 327 tokens · thinking)
+        const spinnerMatch = trimmed.match(/^[✽✻⏵]\s+(.+)/);
+        if (spinnerMatch) {
+          events.push({ type: "status", text: spinnerMatch[1] });
+          continue;
+        }
+
+        // Batch operation: Reading N files…, Editing N files…
+        const batchMatch = trimmed.match(/^(Reading|Editing|Writing|Running)\s+(\d+)\s+files?/i);
+        if (batchMatch) {
+          events.push({ type: "status", text: trimmed });
+          continue;
+        }
+
+        // File result: ⎿ filename
+        const resultMatch = trimmed.match(/^⎿\s+(.+)/);
+        if (resultMatch) {
+          events.push({ type: "result", text: resultMatch[1] });
+          continue;
+        }
+
+        // Agent spawn: N agents launched
+        const agentMatch = trimmed.match(/^(\d+)\s+agents?\s+launched/i);
+        if (agentMatch) {
+          events.push({ type: "agents", text: trimmed });
+          continue;
+        }
+
+        // Sub-agent line: ├─ or └─
+        const subagentMatch = trimmed.match(/^[├└]─\s+(.+)/);
+        if (subagentMatch) {
+          events.push({ type: "subagent", text: subagentMatch[1] });
+          continue;
+        }
+
+        // Prompt marker
+        if (trimmed === "❯") {
+          events.push({ type: "waiting" });
+          continue;
+        }
+      }
+
+      const stateKey = JSON.stringify(events);
+      if (stateKey !== lastPaneContent && events.length > 0) {
+        lastPaneContent = stateKey;
+        for (const evt of events) {
+          res.write(`data: ${JSON.stringify(evt)}\n\n`);
+        }
+      }
+    } catch {}
+  }
+
+  const paneInterval = setInterval(capturePaneState, 250);
+
+  req.on("close", () => {
+    clearInterval(jsonlInterval);
+    clearInterval(paneInterval);
+  });
+});
+
 // SSE: stream agent's live terminal output (pane capture)
 app.get("/api/sessions/:pid/pane-stream", async (req, res) => {
   const pid = Number(req.params.pid);
@@ -1992,13 +2270,56 @@ app.get("/api/sessions/:pid/pane-stream", async (req, res) => {
 
       const lines = pane.split("\n");
 
-      // Detect status: working or waiting
-      const hasPrompt = lines.some((l) => l.includes("❯"));
-      const status = hasPrompt ? "waiting" : "working";
+      // Detect interactive prompts (plan mode, permissions, trust folder)
+      let interactivePrompt = null;
+      const promptLines = [];
+      let inPrompt = false;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        // Detect numbered selection prompts: "❯ 1. ...", "  2. ...", etc.
+        if (line.match(/^\s*❯\s+\d+\.\s/) || (inPrompt && line.match(/^\s+\d+\.\s/))) {
+          inPrompt = true;
+          const match = line.match(/(\d+)\.\s+(.+)/);
+          if (match) promptLines.push({ number: match[1], text: match[2].trim() });
+        }
+        // Detect "Type here to tell Claude what to change" option
+        if (inPrompt && line.match(/^\s+\d+\.\s+Type here/i)) {
+          const match = line.match(/(\d+)\.\s+(.+)/);
+          if (match) {
+            // Already captured above, mark as text input option
+            const existing = promptLines.find(p => p.number === match[1]);
+            if (existing) existing.isTextInput = true;
+          }
+        }
+        // End of prompt area
+        if (inPrompt && line.trim() === '' && promptLines.length > 0) {
+          inPrompt = false;
+        }
+      }
 
-      // Extract the current working output:
-      // When working: everything after the last ❯ (the user's message) or the last ⏺ marker
-      // When waiting: just the status
+      if (promptLines.length >= 2) {
+        // Find the context line before the prompt (e.g. "Claude has written up a plan...")
+        let promptContext = "";
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].match(/❯\s+\d+\./)) {
+            // Look backwards for the context
+            for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
+              const ctx = lines[j].trim();
+              if (ctx && !ctx.match(/^[─━]+$/) && !ctx.match(/^⏺/)) {
+                promptContext = ctx;
+                break;
+              }
+            }
+            break;
+          }
+        }
+        interactivePrompt = { context: promptContext, options: promptLines };
+      }
+
+      // Detect status: working, waiting, or interactive
+      const hasPrompt = lines.some((l) => l.trim() === "❯" || (l.includes("❯") && !l.match(/❯\s+\d+\./)));
+      const status = interactivePrompt ? "interactive" : (hasPrompt ? "waiting" : "working");
+
       let workingText = "";
       let spinnerVerb = "";
 
@@ -2034,7 +2355,7 @@ app.get("/api/sessions/:pid/pane-stream", async (req, res) => {
       }
 
       // Only send if something changed
-      const contentKey = status + "|" + workingText.slice(-200) + "|" + spinnerVerb;
+      const contentKey = status + "|" + workingText.slice(-200) + "|" + spinnerVerb + "|" + JSON.stringify(interactivePrompt);
       if (contentKey !== lastContent) {
         lastContent = contentKey;
         res.write(
@@ -2043,6 +2364,7 @@ app.get("/api/sessions/:pid/pane-stream", async (req, res) => {
             status,
             workingText: workingText.slice(-2000),
             spinnerVerb,
+            interactivePrompt,
           })}\n\n`
         );
       }
