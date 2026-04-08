@@ -1,0 +1,63 @@
+@import "./theme.css";
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+/* Division scanline overlay */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(255, 255, 255, 0.015) 2px,
+    rgba(255, 255, 255, 0.015) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* Subtle vignette */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.5) 100%);
+  pointer-events: none;
+  z-index: 9998;
+}
+
+[data-theme="light"] body::after,
+[data-theme="light"] body::before,
+body.no-crt::after,
+body.no-crt::before {
+  opacity: 0 !important;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(245, 124, 37, 0.25); }
+::-webkit-scrollbar-thumb:hover { background: rgba(245, 124, 37, 0.45); }
+[data-theme="light"] ::-webkit-scrollbar-thumb { background: rgba(208, 106, 30, 0.25); }
+
+:focus-visible {
+  outline: 1px solid var(--orange-dim);
+  outline-offset: -1px;
+}
+
+#app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}

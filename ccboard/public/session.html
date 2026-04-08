@@ -852,7 +852,7 @@
     const pid = window.location.pathname.split('/').pop();
     const MAX_CONTEXT = 1000000;
 
-    function escapeHtml(s) { return s ? s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') : ''; }
+    function escapeHtml(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') : ''; }
     function formatTime(ts) { return ts ? new Date(ts).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) : ''; }
     function formatTokens(n) { return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':String(n); }
 
@@ -953,6 +953,7 @@
 
     // --- Live Actions (center pane top) ---
     let actionCount = 0;
+    const paneEventsSeen = new Set();
 
     // Store full action data for popups
     const actionDataStore = [];
@@ -1150,17 +1151,24 @@
           }
           // results skipped — tool_use action already shows what happened
 
-          // Pane-sourced events — only show active work, not idle state
+          // Pane-sourced events — dedup to avoid repeating
           if (data.type === 'status') {
-            // Update the status indicator in the header, don't add a row
             const statusEl = document.getElementById('actions-status');
             if (statusEl) statusEl.textContent = data.text;
           }
-          if (data.type === 'subagent') {
-            addActionEvent('agent', 'AGENT', data.text);
+          if (data.type === 'subagent' || data.type === 'agents') {
+            const key = data.type + '|' + data.text;
+            if (!paneEventsSeen.has(key)) {
+              paneEventsSeen.add(key);
+              addActionEvent('agent', data.type === 'agents' ? 'AGENTS' : 'AGENT', data.text);
+            }
           }
-          if (data.type === 'agents') {
-            addActionEvent('agent', 'AGENTS', data.text);
+          if (data.type === 'result') {
+            const key = 'result|' + data.text;
+            if (!paneEventsSeen.has(key)) {
+              paneEventsSeen.add(key);
+              addActionEvent('result', '  ⎿', data.text);
+            }
           }
           if (data.type === 'waiting') {
             const statusEl = document.getElementById('actions-status');
@@ -1412,14 +1420,17 @@
         }
 
         // Show latest timestamp
-        const latest = data.categories.reduce((a, b) => (a.timestamp > b.timestamp ? a : b));
-        if (latest.timestamp) timestamp.textContent = formatTime(latest.timestamp);
+        const withTimestamps = data.categories.filter(c => c.timestamp);
+        if (withTimestamps.length > 0) {
+          const latest = withTimestamps.reduce((a, b) => (a.timestamp > b.timestamp ? a : b));
+          if (latest.timestamp) timestamp.textContent = formatTime(latest.timestamp);
+        }
 
         let html = '';
         for (const cat of data.categories) {
           const st = cat.status || 'ok';
           const icon = REVIEW_ICONS[st] || '?';
-          const fc = cat.report?.findings?.length || cat.report?.action_items?.length || 0;
+          const fc = cat.findingCount || cat.report?.findings?.length || cat.report?.action_items?.length || 0;
           const label = cat.category.toUpperCase().replace(/-/g, ' ');
           const isVerdict = cat.isVerdict;
           const verdictClass = isVerdict ? ' verdict-row' : '';
@@ -1435,7 +1446,8 @@
         container.querySelectorAll('.sup-review-item').forEach(el => {
           el.addEventListener('click', () => openReportModal(el.dataset.cat));
         });
-      } catch {
+      } catch (err) {
+        console.error('loadReviews failed:', err);
         document.getElementById('reviews-content').innerHTML = '<div class="sup-empty">no reviews yet</div>';
       }
     }
@@ -1461,40 +1473,53 @@
           html += `<div class="rm-section"><div class="rm-section-title">Executive Summary</div><div class="rm-summary">${escapeHtml(execSummary)}</div></div>`;
         }
 
-        // Council scores
-        const scores = report.council_scores || report.councilMembers || {};
+        // Council scores (supports council_scores, councilMembers, council_status)
+        const scores = report.council_scores || report.councilMembers || report.council_status || {};
         if (Object.keys(scores).length > 0) {
           html += `<div class="rm-section"><div class="rm-section-title">Council Scores</div>`;
           for (const [member, data] of Object.entries(scores)) {
-            const score = typeof data === 'string' ? data : (data.score || data.status || '?');
-            const topFinding = typeof data === 'object' ? (data.top_finding || data.topFinding || '') : '';
-            const scoreIcon = REVIEW_ICONS[score] || (score === 'pass' ? '✓' : score === 'warn' ? '⚠' : score === 'fail' ? '✗' : '?');
+            const score = typeof data === 'string' ? data : (data.verdict || data.score || data.status || data.rating || '?');
+            const topFinding = typeof data === 'object' ? (data.top_finding || data.topFinding || data.trust_score || '') : '';
+            const scoreIcon = score === 'PASS' || score === 'pass' || score === 'ok' ? '✓'
+              : score === 'WARN' || score === 'warn' || score === 'warning' ? '⚠'
+              : score === 'FAIL' || score === 'fail' || score === 'critical' ? '✗' : '?';
+            const scoreColor = scoreIcon === '✓' ? 'var(--green-dim,#6a6)' : scoreIcon === '⚠' ? 'var(--amber-dim)' : scoreIcon === '✗' ? 'var(--red-dim)' : 'var(--text-dim)';
             html += `<div style="display:flex;gap:8px;padding:4px 6px;background:var(--bg);margin-bottom:1px;align-items:baseline;">
-              <span style="font-size:11px;">${scoreIcon}</span>
-              <span style="font-size:10px;color:var(--text-bright);min-width:100px;text-transform:uppercase;letter-spacing:1px;">${member.replace(/-/g,' ')}</span>
+              <span style="font-size:11px;color:${scoreColor}">${scoreIcon}</span>
+              <span style="font-size:10px;color:var(--text-bright);min-width:120px;text-transform:uppercase;letter-spacing:1px;">${member.replace(/-/g,' ').replace(/_/g,' ')}</span>
               <span style="font-size:10px;color:var(--text-dim);flex:1;">${escapeHtml(topFinding)}</span>
             </div>`;
           }
           html += `</div>`;
         }
 
-        // Action items
-        const actionItems = report.action_items || report.fixNow || [];
-        if (Array.isArray(actionItems) && actionItems.length > 0) {
-          html += `<div class="rm-section"><div class="rm-section-title">Action Items (${actionItems.length})</div>`;
-          for (const item of actionItems) {
-            const priority = item.priority || item.urgency || 'medium';
-            const sevColor = priority === 'critical' || priority === 'fix-now' ? 'var(--red-dim)' : priority === 'high' ? 'var(--amber-dim)' : 'var(--text-dim)';
-            html += `<div class="rm-finding" style="border-left-color:${sevColor}">
-              <div class="rm-finding-head">
-                <span class="rm-finding-severity" style="color:${sevColor};border-color:${sevColor}">${escapeHtml(priority)}</span>
-                ${item.source ? `<span style="font-size:8px;color:var(--cyan-dim)">${escapeHtml(item.source)}</span>` : ''}
-              </div>
-              <div class="rm-finding-desc">${escapeHtml(item.title || item.description || item.finding || '')}</div>
-              ${item.reason || item.productImpact ? `<div class="rm-finding-suggestion">→ ${escapeHtml(item.reason || item.productImpact || '')}</div>` : ''}
-            </div>`;
+        // Action items (from normalised findings with _group tags)
+        const findings = report.findings || [];
+        if (findings.length > 0) {
+          const groups = {};
+          for (const f of findings) {
+            const g = f._group || 'current';
+            if (!groups[g]) groups[g] = [];
+            groups[g].push(f);
           }
-          html += `</div>`;
+          const groupLabels = { 'fix-now': 'Fix Now', 'fix-sprint': 'Fix This Sprint', 'new': 'New Findings', 'current': 'Action Items' };
+          for (const [g, items] of Object.entries(groups)) {
+            const label = groupLabels[g] || g;
+            html += `<div class="rm-section"><div class="rm-section-title">${label} (${items.length})</div>`;
+            for (const item of items) {
+              const priority = item.severity || item.priority || item.urgency || 'medium';
+              const sevColor = priority === 'critical' || priority === 'fix-now' ? 'var(--red-dim)' : priority === 'high' || priority === 'issue' ? 'var(--amber-dim)' : 'var(--text-dim)';
+              html += `<div class="rm-finding" style="border-left-color:${sevColor}">
+                <div class="rm-finding-head">
+                  <span class="rm-finding-severity" style="color:${sevColor};border-color:${sevColor}">${escapeHtml(priority)}</span>
+                  ${item.source ? `<span style="font-size:8px;color:var(--cyan-dim)">${escapeHtml(item.source)}</span>` : ''}
+                </div>
+                <div class="rm-finding-desc">${escapeHtml(item.title || item.description || item.finding || '')}</div>
+                ${item.reason || item.productImpact ? `<div class="rm-finding-suggestion">→ ${escapeHtml(item.reason || item.productImpact || '')}</div>` : ''}
+              </div>`;
+            }
+            html += `</div>`;
+          }
         }
 
         // Conflicts
@@ -1517,55 +1542,81 @@
 
       let html = '';
 
-      // Summary
-      html += `<div class="rm-section"><div class="rm-section-title">Summary</div><div class="rm-summary">${escapeHtml(report.summary || 'No summary')}</div></div>`;
+      // Summary (may be string or object)
+      const summaryText = typeof report.summary === 'string' ? report.summary
+        : (report.executive_summary || report.verdict_rationale || report.scale_projections?.notes || '');
+      if (summaryText) {
+        html += `<div class="rm-section"><div class="rm-section-title">Summary</div><div class="rm-summary">${escapeHtml(summaryText)}</div></div>`;
+      }
 
-      // Metadata (whatever the report provides)
+      // Metadata
       const meta = [];
       if (report.runType) meta.push(['Run type', report.runType]);
       if (report.language) meta.push(['Language', report.language]);
       if (report.framework) meta.push(['Framework', report.framework]);
       if (report.anchor?.commitHash) meta.push(['Anchor', report.anchor.commitHash.slice(0, 7)]);
+      if (report.new_head) meta.push(['Head', report.new_head.slice(0, 7)]);
+      if (report.verdict) meta.push(['Verdict', report.verdict.toUpperCase()]);
       if (report.filesAnalysed?.length) meta.push(['Files', report.filesAnalysed.map(f => `<span class="file-tag">${escapeHtml(f)}</span>`).join('')]);
+      if (report.scale_projections?.safe_concurrent_calls) meta.push(['Safe concurrency', report.scale_projections.safe_concurrent_calls]);
+      if (report.scale_projections?.bottleneck_component) meta.push(['Bottleneck', report.scale_projections.bottleneck_component]);
 
       if (meta.length) {
         html += `<div class="rm-section"><div class="rm-section-title">Details</div>`;
         for (const [k, v] of meta) {
-          html += `<div class="rm-method-row"><div class="rm-method-label">${k}</div><div class="rm-method-value">${v}</div></div>`;
+          html += `<div class="rm-method-row"><div class="rm-method-label">${k}</div><div class="rm-method-value">${escapeHtml(String(v))}</div></div>`;
         }
         html += `</div>`;
       }
 
-      // Findings
-      const findings = report.findings || [];
-      html += `<div class="rm-section"><div class="rm-section-title">Findings (${findings.length})</div>`;
-      if (findings.length === 0) {
-        html += `<div class="rm-no-findings">No issues found</div>`;
-      } else {
-        for (const f of findings) {
-          const sev = f.severity || 'low';
+      // Render a group of findings
+      function renderFindings(items, groupTitle) {
+        if (!Array.isArray(items) || items.length === 0) return '';
+        let h = `<div class="rm-section"><div class="rm-section-title">${groupTitle} (${items.length})</div>`;
+        for (const f of items) {
+          const sev = (f.severity || f.status || 'low').toLowerCase();
           const loc = f.location || f.file || '';
           const locStr = typeof loc === 'object' ? `${loc.file || ''}:${loc.line || ''}` : loc;
           const lineStr = f.line ? `${f.file || ''}:${f.line}` : locStr;
 
-          html += `<div class="rm-finding ${sev}">
+          h += `<div class="rm-finding ${sev}">
             <div class="rm-finding-head">
-              <span class="rm-finding-severity">${sev}</span>
+              <span class="rm-finding-severity">${escapeHtml(sev)}</span>
               ${f.confidence ? `<span style="font-size:8px;color:var(--text-dim);border:1px solid var(--border);padding:1px 4px;letter-spacing:1px;">CONF: ${f.confidence}</span>` : ''}
-              ${f.impact ? `<span style="font-size:8px;color:var(--text-dim);border:1px solid var(--border);padding:1px 4px;letter-spacing:1px;">IMPACT: ${f.impact}</span>` : ''}
+              ${f.impact && typeof f.impact === 'string' && f.impact.length <= 20 ? `<span style="font-size:8px;color:var(--text-dim);border:1px solid var(--border);padding:1px 4px;letter-spacing:1px;">IMPACT: ${f.impact}</span>` : ''}
               ${lineStr ? `<span class="rm-finding-location">${escapeHtml(lineStr)}</span>` : ''}
             </div>
             ${f.title ? `<div style="font-size:11px;color:var(--text-bright);margin-bottom:3px;font-weight:500;">${escapeHtml(f.title)}</div>` : ''}
-            <div class="rm-finding-desc">${escapeHtml(f.description || '')}</div>
-            ${f.impact && typeof f.impact === 'string' && f.impact.length > 10 ? `<div style="font-size:9px;color:var(--amber-dim);margin-bottom:3px;">Impact: ${escapeHtml(f.impact)}</div>` : ''}
+            <div class="rm-finding-desc">${escapeHtml(f.description || f.detail || '')}</div>
+            ${f.impact && typeof f.impact === 'string' && f.impact.length > 20 ? `<div style="font-size:9px;color:var(--amber-dim);margin-bottom:3px;">Impact: ${escapeHtml(f.impact)}</div>` : ''}
+            ${f.resolution ? `<div style="font-size:10px;color:var(--green-dim,#6a6);margin-bottom:3px;">✓ ${escapeHtml(f.resolution)}</div>` : ''}
+            ${f.recommendation ? `<div class="rm-finding-suggestion">→ ${escapeHtml(f.recommendation)}</div>` : ''}
             ${f.suggestion ? `<div class="rm-finding-suggestion">→ ${escapeHtml(f.suggestion)}</div>` : ''}
             ${f.evidence ? `<div class="rm-finding-evidence">${escapeHtml(f.evidence)}</div>` : ''}
             ${f.discrepancy ? `<div style="font-size:10px;color:var(--red-dim);margin-top:3px;">${escapeHtml(f.discrepancy)}</div>` : ''}
             ${f.tags?.length ? `<div style="margin-top:3px;">${f.tags.map(t => `<span style="font-size:8px;padding:1px 4px;background:var(--bg);border:1px solid var(--border);color:var(--text-dim);margin-right:2px;">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
           </div>`;
         }
+        h += `</div>`;
+        return h;
       }
-      html += `</div>`;
+
+      // Group findings by _group tag (set by normaliser)
+      const findings = report.findings || [];
+      if (findings.length === 0) {
+        html += `<div class="rm-section"><div class="rm-section-title">Findings</div><div class="rm-no-findings">No issues found</div></div>`;
+      } else {
+        const groups = {};
+        for (const f of findings) {
+          const g = f._group || 'current';
+          if (!groups[g]) groups[g] = [];
+          groups[g].push(f);
+        }
+        const groupLabels = { 'new': 'New Findings', 'unchanged': 'Unchanged', 'resolved': 'Resolved', 'current': 'Findings', 'fix-now': 'Fix Now', 'fix-sprint': 'Fix This Sprint' };
+        for (const [g, items] of Object.entries(groups)) {
+          html += renderFindings(items, groupLabels[g] || g);
+        }
+      }
 
       document.getElementById('rm-body').innerHTML = html;
       modal.classList.add('open');
@@ -1987,7 +2038,7 @@
       setupSlashMenu('sup-input', 'sup-slash-menu', SUP_COMMANDS, sendToSupervisor);
       setupSlashMenu('send-input', 'agent-slash-menu', AGENT_COMMANDS, sendToAgent);
     }
-    init();
+    init().catch(err => console.error('[init] CRASHED:', err));
 
     // --- Resizable panes ---
     function setupResize(handleId, direction, beforeId, afterId) {
@@ -2045,7 +2096,7 @@
 
     setupResize('resize-left', 'col', 'pane-supervisor', null);
     setupResize('resize-right', 'col', 'pane-messages', null);
-    setupResize('resize-center-v', 'row', 'pane-graph-half', 'pane-reviews-half');
+    setupResize('resize-center-v', 'row', 'pane-actions-half', 'pane-reviews-half');
 
     // For right resize, drag left = shrink right pane
     (function() {

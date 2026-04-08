@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "cd ccboard && node --watch server.js",
-    "start": "cd ccboard && node server.js"
+    "start": "cd ccboard && node server.js",
+    "dev:tui": "cd ccboard_tui && npm run dev",
+    "start:tui": "cd ccboard_tui && npm run start",
+    "build:tui": "cd ccboard_tui && npm run build"
   }
 }

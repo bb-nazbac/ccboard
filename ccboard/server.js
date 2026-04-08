@@ -1,5 +1,5 @@
 import express from "express";
-import { readdir, readFile, open } from "fs/promises";
+import { readdir, readFile, writeFile, open } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import { execSync } from "child_process";
@@ -13,6 +13,139 @@ const PORT = 3200;
 const CLAUDE_DIR = join(homedir(), ".claude");
 const SESSIONS_DIR = join(CLAUDE_DIR, "sessions");
 const PROJECTS_DIR = join(CLAUDE_DIR, "projects");
+
+// ============================================================
+// Report Normaliser — canonical schema for all council reports
+// ============================================================
+// Every report gets normalised to: { category, status, summary, timestamp, anchor, findings[], ...rest }
+// This runs on write (via watcher) so the dashboard never deals with variant schemas.
+
+const VERDICT_TO_STATUS = {
+  'fail': 'critical', 'DO NOT SHIP': 'critical', 'FAIL': 'critical',
+  'warn': 'warning', 'WARN': 'warning',
+  'pass': 'ok', 'PASS': 'ok',
+  'mostly-trustworthy': 'warning',
+  'high': 'issue', 'critical': 'critical', 'medium': 'warning', 'low': 'ok',
+};
+
+function normaliseReport(raw) {
+  const report = { ...raw };
+
+  // --- status ---
+  if (!report.status || !['ok', 'warning', 'issue', 'critical'].includes(report.status)) {
+    const v = raw.verdict || raw.overall_verdict || raw.rating || raw.status;
+    report.status = VERDICT_TO_STATUS[v] || v || 'ok';
+  }
+
+  // --- summary (must be a string) ---
+  if (!report.summary || typeof report.summary !== 'string') {
+    report.summary = raw.executive_summary
+      || raw.verdict_rationale
+      || raw.scale_projections?.notes
+      || null;
+
+    // If still no string summary, build from finding counts
+    if (!report.summary || typeof report.summary !== 'string') {
+      const parts = [];
+      if (raw.new_findings?.length) parts.push(`${raw.new_findings.length} new`);
+      if (raw.findings_unchanged?.length) parts.push(`${raw.findings_unchanged.length} unchanged`);
+      if (raw.findings_resolved?.length) parts.push(`${raw.findings_resolved.length} resolved`);
+      if (raw.findings?.length) parts.push(`${raw.findings.length} findings`);
+      report.summary = parts.length ? parts.join(', ') : 'No findings';
+    }
+  }
+
+  // --- findings (merge all finding arrays into one canonical array) ---
+  if (!Array.isArray(report.findings) || raw.new_findings || raw.findings_unchanged || raw.findings_resolved) {
+    const merged = [];
+
+    // Tag each finding with its group so the UI can distinguish
+    for (const f of (raw.new_findings || [])) merged.push({ ...f, _group: 'new' });
+    for (const f of (raw.findings_unchanged || [])) merged.push({ ...f, _group: 'unchanged' });
+    for (const f of (raw.findings_resolved || [])) merged.push({ ...f, _group: 'resolved' });
+
+    // If there's also a plain findings array and no split arrays, use it as-is
+    if (Array.isArray(raw.findings) && !raw.new_findings && !raw.findings_unchanged && !raw.findings_resolved) {
+      for (const f of raw.findings) merged.push({ ...f, _group: 'current' });
+    } else if (Array.isArray(raw.findings) && (raw.new_findings || raw.findings_unchanged || raw.findings_resolved)) {
+      // Both exist — findings might duplicate, skip
+    }
+
+    // Chair uses fixNow/fixThisSprint/track/noted OR action_items (dict with priority buckets)
+    if (raw.category === 'council-verdict') {
+      const ai = raw.action_items;
+      if (Array.isArray(ai)) {
+        for (const f of ai) merged.push({ ...f, _group: 'fix-now', severity: f.priority || f.urgency || 'critical' });
+      } else if (ai && typeof ai === 'object') {
+        // action_items is a dict: { fix_now_production_blocking: [], fix_this_sprint: [], track: [], noted_for_later: [] }
+        const bucketMap = {
+          'fix_now_production_blocking': { group: 'fix-now', severity: 'critical' },
+          'fix_now': { group: 'fix-now', severity: 'critical' },
+          'fix_this_sprint': { group: 'fix-sprint', severity: 'high' },
+          'track': { group: 'track', severity: 'medium' },
+          'noted_for_later': { group: 'noted', severity: 'low' },
+          'noted': { group: 'noted', severity: 'low' },
+        };
+        for (const [bucket, items] of Object.entries(ai)) {
+          if (!Array.isArray(items)) continue;
+          const cfg = bucketMap[bucket] || { group: bucket, severity: 'medium' };
+          for (const f of items) merged.push({ ...f, _group: cfg.group, severity: f.severity || f.priority || cfg.severity });
+        }
+      }
+      for (const f of (raw.fixNow || [])) merged.push({ ...f, _group: 'fix-now', severity: f.priority || f.urgency || 'critical' });
+      for (const f of (raw.fixThisSprint || [])) merged.push({ ...f, _group: 'fix-sprint', severity: f.priority || 'high' });
+    }
+
+    report.findings = merged;
+  }
+
+  // Normalise each finding's description field
+  for (const f of report.findings) {
+    if (!f.description && f.detail) f.description = f.detail;
+    if (!f.description && f.observation) f.description = f.observation;
+    if (!f.suggestion && f.recommendation) f.suggestion = f.recommendation;
+  }
+
+  // --- timestamp ---
+  if (!report.timestamp) report.timestamp = new Date().toISOString();
+
+  // Mark as normalised so we don't re-process
+  report._normalised = true;
+
+  return report;
+}
+
+// Watch a .ccboard/reports directory and normalise any latest.json on change
+const watchedReportDirs = new Set();
+
+function watchReportsDir(reportsDir) {
+  if (watchedReportDirs.has(reportsDir)) return;
+  watchedReportDirs.add(reportsDir);
+
+  // Poll every 5 seconds for changed reports (fs.watch unreliable on macOS)
+  const mtimes = {};
+  setInterval(async () => {
+    try {
+      const dirs = await readdir(reportsDir);
+      for (const dir of dirs) {
+        const filePath = join(reportsDir, dir, 'latest.json');
+        try {
+          const info = await stat(filePath);
+          const mtime = info.mtimeMs;
+          if (mtimes[filePath] && mtimes[filePath] === mtime) continue;
+          mtimes[filePath] = mtime;
+
+          const raw = JSON.parse(await readFile(filePath, 'utf-8'));
+          if (raw._normalised) continue;
+
+          const normalised = normaliseReport(raw);
+          await writeFile(filePath, JSON.stringify(normalised, null, 2));
+          console.log(`[normaliser] normalised ${dir}/latest.json`);
+        } catch {}
+      }
+    } catch {}
+  }, 5000);
+}
 
 // No JSONL path cache — always resolve fresh to handle session changes
 
@@ -913,7 +1046,7 @@ app.post("/api/launch", async (req, res) => {
     const pairing = await readSessionPairing(cwd);
 
     // Build agent command
-    let agentCmd = "claude --dangerously-skip-permissions --model sonnet";
+    let agentCmd = "claude --dangerously-skip-permissions --model opus";
     if (resume && sessionId) {
       agentCmd += ` --resume ${sessionId}`;
     } else if (resume && pairing?.agentSessionId) {
@@ -933,7 +1066,7 @@ app.post("/api/launch", async (req, res) => {
 
     // Build supervisor command
     const systemPrompt = buildSupervisorSystemPrompt(agentTmux).replace(/"/g, '\\"');
-    let supCmd = `claude --dangerously-skip-permissions --model sonnet --system-prompt "${systemPrompt}"`;
+    let supCmd = `claude --dangerously-skip-permissions --model opus --system-prompt "${systemPrompt}"`;
     if (resume && pairing?.supervisorSessionId) {
       supCmd += ` --resume ${pairing.supervisorSessionId}`;
     }
@@ -1578,7 +1711,7 @@ app.post("/api/sessions/:pid/supervisor/start", async (req, res) => {
     const primaryTmux = session.managed ? session.tmuxSession : null;
     const systemPrompt = buildSupervisorSystemPrompt(primaryTmux).replace(/"/g, '\\"');
 
-    let supCmd = `claude --dangerously-skip-permissions --model sonnet --system-prompt "${systemPrompt}"`;
+    let supCmd = `claude --dangerously-skip-permissions --model opus --system-prompt "${systemPrompt}"`;
     if (pairing?.supervisorSessionId) {
       supCmd += ` --resume ${pairing.supervisorSessionId}`;
     }
@@ -1846,7 +1979,7 @@ app.post("/api/sessions/:pid/supervisor/send", async (req, res) => {
   }
 });
 
-// Read .ccboard/ review files
+// Read .ccboard/ review files (normalised on disk by watcher)
 app.get("/api/sessions/:pid/supervisor/reviews", async (req, res) => {
   const pid = Number(req.params.pid);
   const sessions = await getSessions();
@@ -1854,27 +1987,31 @@ app.get("/api/sessions/:pid/supervisor/reviews", async (req, res) => {
   if (!session) return res.status(404).json({ error: "session not found" });
 
   const reportsDir = join(session.cwd, ".ccboard", "reports");
-  const categories = [];
 
-  // Scan all category directories for latest.json
+  // Start watching this reports dir if not already
+  watchReportsDir(reportsDir);
+
+  const categories = [];
   try {
     const dirs = await readdir(reportsDir);
     for (const dir of dirs) {
       try {
-        const raw = await readFile(join(reportsDir, dir, "latest.json"), "utf-8");
-        const report = JSON.parse(raw);
+        const raw = JSON.parse(await readFile(join(reportsDir, dir, "latest.json"), "utf-8"));
+        // Normalise on read if watcher hasn't caught it yet
+        const report = raw._normalised ? raw : normaliseReport(raw);
+
         categories.push({
           category: report.category || dir,
-          status: report.status || report.overall_score || "ok",
-          summary: report.summary || report.executive_summary || "No summary",
+          status: report.status,
+          summary: report.summary,
+          findingCount: report.findings?.length || 0,
           timestamp: report.timestamp || null,
           isVerdict: dir === "council-verdict" || report.category === "council-verdict",
           report,
         });
-      } catch {}
+      } catch (err) { console.error(`[reviews] failed to read ${dir}:`, err.message); }
     }
-  } catch {}
-
+  } catch (err) { console.error('[reviews] failed to read reports dir:', err.message); }
 
   // Sort: verdict first, then alphabetical
   categories.sort((a, b) => {

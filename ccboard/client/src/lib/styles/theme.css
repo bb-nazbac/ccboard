@@ -1,0 +1,89 @@
+/* === The Division — Dark Theme (default) === */
+:root {
+  /* Primary orange */
+  --orange: #F57C25;
+  --orange-bright: #FF8C00;
+  --orange-dim: #C46A28;
+  --orange-glow: rgba(245, 124, 37, 0.35);
+  --orange-faint: rgba(245, 124, 37, 0.12);
+
+  /* Status */
+  --green: #6AB547;
+  --green-dim: #4A8A30;
+  --green-faint: rgba(106, 181, 71, 0.12);
+  --red: #D93B3B;
+  --red-dim: #A02B2B;
+  --red-faint: rgba(217, 59, 59, 0.10);
+  --blue: #2B8FCC;
+  --blue-dim: #1E6E9E;
+  --yellow: #E8D44D;
+  --yellow-dim: #B0A030;
+  --purple: #9B59B6;
+
+  /* Backgrounds */
+  --bg: #0A0A0A;
+  --bg-panel: rgba(15, 15, 15, 0.85);
+  --bg-panel-hover: rgba(30, 30, 30, 0.90);
+  --bg-header: rgba(20, 20, 20, 0.92);
+  --bg-overlay: rgba(0, 0, 0, 0.70);
+
+  /* Text */
+  --text: #8A8A8A;
+  --text-bright: #E8E8E8;
+  --text-dim: #555555;
+  --text-white: #FFFFFF;
+
+  /* Borders */
+  --border: rgba(245, 124, 37, 0.20);
+  --border-bright: rgba(245, 124, 37, 0.50);
+  --border-neutral: rgba(255, 255, 255, 0.08);
+
+  /* Fonts */
+  --font-heading: 'Rajdhani', sans-serif;
+  --font-body: 'Exo 2', 'Rajdhani', sans-serif;
+  --font-data: 'Chakra Petch', 'Share Tech Mono', monospace;
+  --font-mono: 'Share Tech Mono', monospace;
+
+  /* Aliases for components that use old var names */
+  --amber: var(--orange);
+  --amber-dim: var(--orange-dim);
+  --amber-faint: var(--orange-faint);
+  --cyan: var(--blue);
+  --cyan-dim: var(--blue-dim);
+  --cyan-faint: rgba(43, 143, 204, 0.10);
+  --bg-card: var(--bg-panel);
+  --bg-card-hover: var(--bg-panel-hover);
+}
+
+/* === Light Theme === */
+[data-theme="light"] {
+  --orange: #D06A1E;
+  --orange-bright: #E07828;
+  --orange-dim: #A05518;
+  --orange-glow: rgba(208, 106, 30, 0.25);
+  --orange-faint: rgba(208, 106, 30, 0.08);
+
+  --green: #4A8A30;
+  --green-dim: #3A7025;
+  --green-faint: rgba(74, 138, 48, 0.08);
+  --red: #B83030;
+  --red-dim: #902525;
+  --red-faint: rgba(184, 48, 48, 0.06);
+  --blue: #1E6E9E;
+  --blue-dim: #155880;
+  --yellow: #B0A030;
+
+  --bg: #F0F0F0;
+  --bg-panel: rgba(255, 255, 255, 0.92);
+  --bg-panel-hover: rgba(240, 240, 240, 0.95);
+  --bg-header: rgba(245, 245, 245, 0.95);
+
+  --text: #555;
+  --text-bright: #1A1A1A;
+  --text-dim: #999;
+  --text-white: #000;
+
+  --border: rgba(208, 106, 30, 0.20);
+  --border-bright: rgba(208, 106, 30, 0.45);
+  --border-neutral: rgba(0, 0, 0, 0.08);
+}
