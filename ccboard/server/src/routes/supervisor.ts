@@ -154,7 +154,7 @@ Then introduce yourself and tell me what you see in this project. Read the recen
       setTimeout(sendInitial, 3000);
     }
 
-    // Update pairing file with supervisor session ID
+    // Update pairing file with supervisor session ID and PID
     setTimeout(() => {
       void (async () => {
         try {
@@ -174,6 +174,7 @@ Then introduce yourself and tell me what you see in this project. Read the recen
             agentTmux: existingPairing?.agentTmux ?? "",
             supervisorTmux: supTmux,
             ...existingPairing,
+            supervisorPid: Number(supPanePid) || undefined,
             supervisorSessionId:
               pairing?.supervisorSessionId ?? supSid,
           });

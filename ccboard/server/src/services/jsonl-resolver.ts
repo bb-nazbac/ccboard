@@ -1,13 +1,27 @@
-import { readdir, readFile, stat, open } from "fs/promises";
+import { readdir, readFile, stat } from "fs/promises";
 import { execSync } from "child_process";
 import { join } from "path";
 import { SESSIONS_DIR, PROJECTS_DIR } from "../lib/constants.js";
 import { getManagedTmuxSessions } from "./tmux.js";
-import { cwdToProjectDir, readSessionPairing } from "./pairing.js";
+import {
+  cwdToProjectDir,
+  readSessionPairing,
+  backfillPairing,
+  updateSessionPairing,
+  detectJsonlForRole,
+} from "./pairing.js";
+import { createLogger } from "../lib/logger.js";
 
-/** Collect session IDs belonging to supervisor tmux sessions */
-export async function getSupervisorSessionIds(): Promise<Set<string>> {
+const log = createLogger("jsonl");
+
+/**
+ * Collect session IDs belonging to supervisor tmux sessions.
+ * Reads from both running tmux sessions AND pairing files.
+ */
+export async function getSupervisorSessionIds(cwd?: string): Promise<Set<string>> {
   const ids = new Set<string>();
+
+  // 1. From running tmux sessions (live)
   const managed = getManagedTmuxSessions();
   for (const name of managed) {
     if (!name.includes("-sup-")) continue;
@@ -24,20 +38,24 @@ export async function getSupervisorSessionIds(): Promise<Set<string>> {
       // skip — pane or file might not exist
     }
   }
+
+  // 2. From pairing file (catches old/stopped supervisors)
+  if (cwd) {
+    try {
+      const pairing = await readSessionPairing(cwd);
+      if (pairing?.supervisorSessionId) ids.add(pairing.supervisorSessionId);
+    } catch {
+      // ignore
+    }
+  }
+
   return ids;
 }
 
-/** Supervisor-marker strings found in the first bytes of supervisor JONLs */
-const SUPERVISOR_MARKERS = [
-  "supervising",
-  "SUPERVISOR",
-  "council",
-  "pair-programming supervisor",
-] as const;
-
 /**
  * Find the most recently modified JSONL in a project directory.
- * Excludes JONLs belonging to supervisor sessions.
+ * Excludes JONLs belonging to supervisor sessions using pairing-based exclusion only
+ * (NO content heuristics).
  */
 export async function findLatestJsonl(
   projectDir: string,
@@ -53,43 +71,19 @@ export async function findLatestJsonl(
   const jsonls = files.filter((f) => f.endsWith(".jsonl"));
   if (jsonls.length === 0) return null;
 
-  // Collect ALL supervisor session IDs to exclude:
-  // 1. From running tmux sessions
-  const supIds = await getSupervisorSessionIds();
+  // Collect supervisor session IDs to exclude (pairing + tmux, no content heuristic)
+  const supIds = await getSupervisorSessionIds(cwd);
 
-  // 2. From the pairing file (catches old/stopped supervisors)
-  if (cwd) {
-    try {
-      const pairing = await readSessionPairing(cwd);
-      if (pairing?.supervisorSessionId) supIds.add(pairing.supervisorSessionId);
-    } catch {
-      // ignore
-    }
-  }
-
-  // 3. Heuristic: check first 2 KB of each JSONL for supervisor markers
-  for (const f of jsonls) {
-    const sid = f.replace(".jsonl", "");
-    if (supIds.has(sid)) continue;
-    try {
-      const fh = await open(join(dirPath, f), "r");
-      const buf = Buffer.alloc(2000);
-      await fh.read(buf, 0, 2000, 0);
-      await fh.close();
-      const head = buf.toString("utf-8");
-      if (SUPERVISOR_MARKERS.some((m) => head.includes(m))) {
-        supIds.add(sid);
-      }
-    } catch {
-      // skip
-    }
-  }
+  log.debug({ supIds: [...supIds], jsonlCount: jsonls.length, projectDir }, "excluding supervisor JONLs");
 
   let latest: string | null = null;
   let latestMtime = 0;
   for (const f of jsonls) {
     const sessionId = f.replace(".jsonl", "");
-    if (supIds.has(sessionId)) continue;
+    if (supIds.has(sessionId)) {
+      log.debug({ sessionId: sessionId.slice(0, 8) }, "excluded supervisor JSONL");
+      continue;
+    }
     try {
       const info = await stat(join(dirPath, f));
       if (info.mtimeMs > latestMtime) {
@@ -100,7 +94,9 @@ export async function findLatestJsonl(
       // skip
     }
   }
-  return latest ? join(dirPath, latest) : null;
+  const result = latest ? join(dirPath, latest) : null;
+  log.debug({ result: result?.split("/").pop() }, "findLatestJsonl resolved");
+  return result;
 }
 
 /**
@@ -109,6 +105,7 @@ export async function findLatestJsonl(
  */
 export async function findLargestJsonl(
   projectDir: string,
+  cwd?: string,
 ): Promise<string | null> {
   const dirPath = join(PROJECTS_DIR, projectDir);
   let files: string[];
@@ -120,7 +117,7 @@ export async function findLargestJsonl(
   const jsonls = files.filter((f) => f.endsWith(".jsonl"));
   if (jsonls.length === 0) return null;
 
-  const supIds = await getSupervisorSessionIds();
+  const supIds = await getSupervisorSessionIds(cwd);
 
   let largest: string | null = null;
   let largestSize = 0;
@@ -142,7 +139,11 @@ export async function findLargestJsonl(
 
 /**
  * Resolve the ACTIVE JSONL (what the agent is writing to right now).
- * Tries: (1) exact sessionId, (2) most-recent non-supervisor file.
+ * Priority:
+ *   1. Pairing file: if agentJsonl is set and file exists → use it
+ *   2. Exact sessionId match: if {sessionId}.jsonl exists → use it, update pairing
+ *   3. Process-time fallback: most recently modified JSONL after startedAt, excluding supervisor
+ *   4. Legacy fallback: findLatestJsonl (for non-managed sessions)
  */
 export async function resolveActiveJsonl(
   _pid: number,
@@ -151,49 +152,76 @@ export async function resolveActiveJsonl(
 ): Promise<string | null> {
   const projectDir = cwdToProjectDir(cwd);
 
-  // 1. Try exact sessionId match
+  // 1. Check pairing file for explicit agentJsonl
+  try {
+    const pairing = await readSessionPairing(cwd);
+    if (pairing?.agentJsonl) {
+      try {
+        await stat(pairing.agentJsonl);
+        log.debug({ pid: _pid, method: "pairing-agentJsonl", file: pairing.agentJsonl.split("/").pop() }, "resolveActiveJsonl");
+        return pairing.agentJsonl;
+      } catch {
+        log.debug({ pid: _pid }, "pairing agentJsonl file missing, falling through");
+      }
+    }
+  } catch {
+    // no pairing file
+  }
+
+  // 2. Exact sessionId match
   const exactPath = join(PROJECTS_DIR, projectDir, `${sessionId}.jsonl`);
   try {
     await stat(exactPath);
+    log.debug({ pid: _pid, sessionId: sessionId.slice(0, 8), method: "exact" }, "resolveActiveJsonl");
+    // Update pairing with discovered path
+    void updateSessionPairing(cwd, { agentJsonl: exactPath, agentSessionId: sessionId });
     return exactPath;
   } catch {
-    // fall through
+    log.debug({ pid: _pid, sessionId: sessionId.slice(0, 8) }, "exact JSONL not found");
   }
 
-  // 2. Pick the most recently modified JSONL, excluding the current supervisor
-  const dirPath = join(PROJECTS_DIR, projectDir);
-  let files: string[];
-  try {
-    files = await readdir(dirPath);
-  } catch {
-    return null;
-  }
-  const jsonls = files.filter((f) => f.endsWith(".jsonl"));
-
-  const excludeIds = new Set<string>();
+  // 3. Process-time fallback using pairing metadata
   try {
     const pairing = await readSessionPairing(cwd);
-    if (pairing?.supervisorSessionId) excludeIds.add(pairing.supervisorSessionId);
+    if (pairing) {
+      const excludeIds = new Set<string>();
+      if (pairing.supervisorSessionId) excludeIds.add(pairing.supervisorSessionId);
+
+      const detected = await detectJsonlForRole(
+        cwd,
+        pairing.agentSessionId,
+        pairing.startedAt,
+        excludeIds,
+      );
+      if (detected) {
+        log.debug({ pid: _pid, method: "time-fallback", file: detected.split("/").pop() }, "resolveActiveJsonl");
+        void updateSessionPairing(cwd, { agentJsonl: detected });
+        return detected;
+      }
+    }
   } catch {
     // ignore
   }
 
-  let latest: string | null = null;
-  let latestMtime = 0;
-  for (const f of jsonls) {
-    const sid = f.replace(".jsonl", "");
-    if (excludeIds.has(sid)) continue;
-    try {
-      const info = await stat(join(dirPath, f));
-      if (info.mtimeMs > latestMtime) {
-        latestMtime = info.mtimeMs;
-        latest = f;
+  // 4. Trigger a backfill attempt, then try again from pairing
+  try {
+    const backfilled = await backfillPairing(cwd);
+    if (backfilled?.agentJsonl) {
+      try {
+        await stat(backfilled.agentJsonl);
+        log.debug({ pid: _pid, method: "backfill", file: backfilled.agentJsonl.split("/").pop() }, "resolveActiveJsonl");
+        return backfilled.agentJsonl;
+      } catch {
+        // file gone
       }
-    } catch {
-      // skip
     }
+  } catch {
+    // ignore
   }
-  return latest ? join(dirPath, latest) : null;
+
+  // 5. Legacy fallback for non-managed sessions
+  log.debug({ pid: _pid, method: "legacy-fallback" }, "resolveActiveJsonl");
+  return findLatestJsonl(projectDir, cwd);
 }
 
 /**
@@ -206,7 +234,7 @@ export async function resolveHistoryJsonls(
   sessionId: string,
 ): Promise<string[]> {
   const projectDir = cwdToProjectDir(cwd);
-  const supIds = await getSupervisorSessionIds();
+  const supIds = await getSupervisorSessionIds(cwd);
   const paths = new Set<string>();
 
   // Active JSONL
@@ -216,19 +244,13 @@ export async function resolveHistoryJsonls(
   // Pairing file JSONL (may be a different, older session)
   try {
     const pairing = await readSessionPairing(cwd);
-    if (pairing?.agentTmux) {
-      // agentSessionId may be stored under a different key; check for agentSessionId-like field
-      // In the JS original, it uses pairing.agentSessionId — we access the parsed JSON carefully
-      const pairingAny = pairing as unknown as Record<string, unknown>;
-      const agentSessionId = pairingAny.agentSessionId;
-      if (typeof agentSessionId === "string") {
-        const pairingPath = join(PROJECTS_DIR, projectDir, `${agentSessionId}.jsonl`);
-        try {
-          await stat(pairingPath);
-          if (!supIds.has(agentSessionId)) paths.add(pairingPath);
-        } catch {
-          // file doesn't exist
-        }
+    if (pairing?.agentSessionId) {
+      const pairingPath = join(PROJECTS_DIR, projectDir, `${pairing.agentSessionId}.jsonl`);
+      try {
+        await stat(pairingPath);
+        if (!supIds.has(pairing.agentSessionId)) paths.add(pairingPath);
+      } catch {
+        // file doesn't exist
       }
     }
   } catch {
@@ -236,7 +258,7 @@ export async function resolveHistoryJsonls(
   }
 
   // Also include the largest non-supervisor JSONL (the main conversation)
-  const largest = await findLargestJsonl(projectDir);
+  const largest = await findLargestJsonl(projectDir, cwd);
   if (largest) paths.add(largest);
 
   return [...paths];
@@ -262,6 +284,6 @@ export async function resolveJsonlPath(
     await stat(jsonlPath);
     return jsonlPath;
   } catch {
-    return findLatestJsonl(projectDir);
+    return findLatestJsonl(projectDir, cwd);
   }
 }

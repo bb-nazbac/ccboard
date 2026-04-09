@@ -1,8 +1,8 @@
-/** Create a managed SSE connection with typed event handling and auto-reconnect. */
+import { sseLog } from "../utils/logger";
+
 export interface SSEConnection {
   connect: () => void;
   disconnect: () => void;
-  readonly connected: boolean;
 }
 
 export function createSSE<T>(
@@ -11,23 +11,23 @@ export function createSSE<T>(
   reconnectMs = 3000
 ): SSEConnection {
   let es: EventSource | null = null;
-  let isConnected = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   function connect() {
     disconnect();
+    sseLog.info("connecting", url);
     es = new EventSource(url);
-    es.onopen = () => { isConnected = true; };
+    es.onopen = () => sseLog.debug("connected", url);
     es.onmessage = (evt) => {
       try {
         const data = JSON.parse(evt.data) as T;
         onEvent(data);
       } catch {
-        // skip malformed events
+        sseLog.warn("malformed SSE data", url, evt.data?.slice(0, 100));
       }
     };
     es.onerror = () => {
-      isConnected = false;
+      sseLog.warn("error, reconnecting in", reconnectMs, "ms", url);
       es?.close();
       es = null;
       reconnectTimer = setTimeout(connect, reconnectMs);
@@ -35,20 +35,9 @@ export function createSSE<T>(
   }
 
   function disconnect() {
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-    if (es) {
-      es.close();
-      es = null;
-    }
-    isConnected = false;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (es) { sseLog.debug("disconnecting", url); es.close(); es = null; }
   }
 
-  return {
-    connect,
-    disconnect,
-    get connected() { return isConnected; },
-  };
+  return { connect, disconnect };
 }

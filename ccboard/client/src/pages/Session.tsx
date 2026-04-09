@@ -1,0 +1,336 @@
+import { useState, useEffect, useCallback, useRef } from "react";
+import type { Session as SessionType, ContextInfo } from "../lib/types/session";
+import { getSessions, getContext, getSupervisorStatus } from "../lib/services/api";
+import { apiLog, navLog, renderLog } from "../lib/utils/logger";
+import { formatTokens } from "../lib/utils/time";
+import { SupervisorPane } from "../components/session/supervisor/SupervisorPane";
+import { MessagesPane } from "../components/session/messages/MessagesPane";
+import { ActionsPane } from "../components/session/actions/ActionsPane";
+import { ReviewsPane } from "../components/session/reviews/ReviewsPane";
+
+interface SessionProps {
+  pid: number;
+}
+
+export function Session({ pid }: SessionProps) {
+  const [sessions, setSessions] = useState<SessionType[]>([]);
+  const [context, setContext] = useState<ContextInfo | null>(null);
+  const [supTmux, setSupTmux] = useState<string | null>(null);
+  const [leftWidth, setLeftWidth] = useState(25);
+  const [rightWidth, setRightWidth] = useState(35);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const currentSession = sessions.find((s) => s.pid === pid) || null;
+
+  // Load sessions list for tab bar
+  useEffect(() => {
+    const fetch = async () => {
+      try {
+        const data = await getSessions();
+        setSessions(data);
+      } catch (err) {
+        apiLog.warn("sessions fetch failed", err);
+      }
+    };
+    fetch();
+    const iv = setInterval(fetch, 5000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Load context
+  useEffect(() => {
+    const fetch = async () => {
+      try {
+        const ctx = await getContext(pid);
+        setContext(ctx);
+        apiLog.debug("context loaded", ctx);
+      } catch (err) {
+        apiLog.warn("context fetch failed", err);
+      }
+    };
+    fetch();
+    const iv = setInterval(fetch, 5000);
+    return () => clearInterval(iv);
+  }, [pid]);
+
+  // Load supervisor status for tmux session
+  useEffect(() => {
+    (async () => {
+      try {
+        const status = await getSupervisorStatus(pid);
+        setSupTmux(status.tmuxSession || null);
+        apiLog.debug("supervisor tmux", status.tmuxSession);
+      } catch (err) {
+        apiLog.warn("supervisor status failed", err);
+      }
+    })();
+  }, [pid]);
+
+  // Keyboard shortcuts: Shift+Left/Right to cycle sessions
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!e.shiftKey || sessions.length < 2) return;
+      const idx = sessions.findIndex((s) => s.pid === pid);
+      if (idx === -1) return;
+
+      let next = -1;
+      if (e.key === "ArrowLeft") {
+        next = idx > 0 ? idx - 1 : sessions.length - 1;
+      } else if (e.key === "ArrowRight") {
+        next = idx < sessions.length - 1 ? idx + 1 : 0;
+      }
+
+      if (next >= 0) {
+        navLog.info("cycle session", sessions[next].pid);
+        window.location.href = `/session/${sessions[next].pid}`;
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [sessions, pid]);
+
+  // Resizable panes
+  const startDragLeft = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startW = leftWidth;
+      const onMove = (me: MouseEvent) => {
+        const container = containerRef.current;
+        if (!container) return;
+        const delta = ((me.clientX - startX) / container.clientWidth) * 100;
+        const newW = Math.max(15, Math.min(45, startW + delta));
+        setLeftWidth(newW);
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    },
+    [leftWidth]
+  );
+
+  const startDragRight = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startW = rightWidth;
+      const onMove = (me: MouseEvent) => {
+        const container = containerRef.current;
+        if (!container) return;
+        const delta = ((startX - me.clientX) / container.clientWidth) * 100;
+        const newW = Math.max(20, Math.min(50, startW + delta));
+        setRightWidth(newW);
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    },
+    [rightWidth]
+  );
+
+  const tokenPct = context
+    ? Math.min(100, (context.totalContextTokens / 200000) * 100)
+    : 0;
+
+  renderLog.debug("Session render", pid);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      {/* Tab bar */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          background: "var(--bg-header)",
+          borderBottom: "1px solid var(--border)",
+          overflow: "hidden",
+        }}
+      >
+        {/* Back to dashboard */}
+        <div
+          onClick={() => {
+            navLog.info("back to dashboard");
+            window.location.href = "/";
+          }}
+          style={{
+            padding: "0.4rem 0.75rem",
+            fontFamily: "var(--font-heading)",
+            fontSize: "0.75rem",
+            letterSpacing: "0.1em",
+            color: "var(--orange)",
+            cursor: "pointer",
+            borderRight: "1px solid var(--border-neutral)",
+            flexShrink: 0,
+          }}
+        >
+          CCBOARD
+        </div>
+
+        {/* Session tabs */}
+        <div
+          style={{
+            display: "flex",
+            flex: 1,
+            overflowX: "auto",
+          }}
+        >
+          {sessions.map((s) => (
+            <div
+              key={s.pid}
+              onClick={() => {
+                if (s.pid !== pid) {
+                  navLog.info("switch session", s.pid);
+                  window.location.href = `/session/${s.pid}`;
+                }
+              }}
+              style={{
+                padding: "0.4rem 0.75rem",
+                fontFamily: "var(--font-data)",
+                fontSize: "0.7rem",
+                letterSpacing: "0.04em",
+                color: s.pid === pid ? "var(--orange)" : "var(--text-dim)",
+                borderBottom: s.pid === pid ? "2px solid var(--orange)" : "2px solid transparent",
+                cursor: s.pid === pid ? "default" : "pointer",
+                whiteSpace: "nowrap",
+                flexShrink: 0,
+              }}
+            >
+              {s.shortName || `PID ${s.pid}`}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Context bar */}
+      {context && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "1rem",
+            padding: "0.3rem 1rem",
+            background: "var(--bg-panel)",
+            borderBottom: "1px solid var(--border-neutral)",
+            fontFamily: "var(--font-data)",
+            fontSize: "0.65rem",
+            letterSpacing: "0.06em",
+            color: "var(--text-dim)",
+          }}
+        >
+          {/* Token bar */}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", minWidth: "140px" }}>
+            <span style={{ color: "var(--text)" }}>TOKENS</span>
+            <div
+              style={{
+                flex: 1,
+                height: "4px",
+                background: "rgba(255,255,255,0.05)",
+                position: "relative",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  width: `${tokenPct}%`,
+                  height: "100%",
+                  background: tokenPct > 80 ? "var(--red)" : "var(--orange)",
+                  boxShadow: `0 0 6px ${tokenPct > 80 ? "var(--red)" : "var(--orange-glow)"}`,
+                  transition: "width 0.3s",
+                }}
+              />
+            </div>
+            <span>{formatTokens(context.totalContextTokens)}</span>
+          </div>
+
+          <span>TURNS {context.totalTurns}</span>
+          <span>TOOLS {context.totalToolCalls}</span>
+          <span>MSGS {context.totalMessages}</span>
+          <span>{tokenPct.toFixed(0)}%</span>
+        </div>
+      )}
+
+      {/* Three-pane layout */}
+      <div
+        ref={containerRef}
+        style={{
+          flex: 1,
+          display: "flex",
+          overflow: "hidden",
+        }}
+      >
+        {/* Left: Supervisor */}
+        <div style={{ width: `${leftWidth}%`, flexShrink: 0, overflow: "hidden" }}>
+          <SupervisorPane pid={pid} tmuxSession={supTmux} />
+        </div>
+
+        {/* Drag handle left */}
+        <div
+          onMouseDown={startDragLeft}
+          style={{
+            width: "4px",
+            cursor: "col-resize",
+            background: "var(--border-neutral)",
+            flexShrink: 0,
+            transition: "background 0.1s",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--orange-dim)")}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "var(--border-neutral)")}
+        />
+
+        {/* Center: Actions (top) + Reviews (bottom) */}
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+            minWidth: 0,
+          }}
+        >
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            <ActionsPane pid={pid} />
+          </div>
+          <div
+            style={{
+              height: "1px",
+              background: "var(--border)",
+              flexShrink: 0,
+            }}
+          />
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            <ReviewsPane pid={pid} />
+          </div>
+        </div>
+
+        {/* Drag handle right */}
+        <div
+          onMouseDown={startDragRight}
+          style={{
+            width: "4px",
+            cursor: "col-resize",
+            background: "var(--border-neutral)",
+            flexShrink: 0,
+            transition: "background 0.1s",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--orange-dim)")}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "var(--border-neutral)")}
+        />
+
+        {/* Right: Agent messages */}
+        <div style={{ width: `${rightWidth}%`, flexShrink: 0, overflow: "hidden" }}>
+          <MessagesPane
+            pid={pid}
+            tmuxSession={currentSession?.tmuxSession || null}
+            tty={currentSession?.tty || null}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}

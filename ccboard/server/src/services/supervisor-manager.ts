@@ -7,11 +7,12 @@ import { execSync } from "child_process";
 import { readFile, stat } from "fs/promises";
 import { join } from "path";
 import { CLAUDE_DIR, SESSIONS_DIR, PROJECTS_DIR, TMUX_PREFIX } from "../lib/constants.js";
+import { createLogger } from "../lib/logger.js";
 import {
   isTmuxPaneWaiting,
   sendToTmuxSession,
 } from "./tmux.js";
-import { cwdToProjectDir, readSessionPairing } from "./pairing.js";
+import { cwdToProjectDir, readSessionPairing, updateSessionPairing } from "./pairing.js";
 import { readFullConversation } from "./jsonl-parser.js";
 import {
   extractActionTurns,
@@ -23,6 +24,8 @@ import { getSessions } from "./session-reader.js";
 import type { Session } from "../schemas/session.js";
 import type { JsonlUserEntry } from "../schemas/jsonl.js";
 import type { ChatMessage } from "../schemas/api.js";
+
+const log = createLogger("supervisor");
 
 // ---------------------------------------------------------------------------
 // Supervisor state
@@ -388,17 +391,35 @@ export async function resolveSupervisorJsonlPath(
 ): Promise<string | null> {
   const projectDir = cwdToProjectDir(cwd);
 
-  // 1. Try pairing file (most reliable for resumed supervisors)
+  // 1. Check pairing for explicit supervisorJsonl path
   try {
     const pairing = await readSessionPairing(cwd);
+    if (pairing?.supervisorJsonl) {
+      try {
+        await stat(pairing.supervisorJsonl);
+        log.debug({ method: "pairing-supervisorJsonl", file: pairing.supervisorJsonl.split("/").pop() }, "resolveSupervisorJsonlPath");
+        return pairing.supervisorJsonl;
+      } catch {
+        log.debug("pairing supervisorJsonl file missing, falling through");
+      }
+    }
+
+    // 1b. Try supervisorSessionId from pairing
     if (pairing?.supervisorSessionId) {
       const pairingPath = join(
         PROJECTS_DIR,
         projectDir,
         `${pairing.supervisorSessionId}.jsonl`,
       );
-      await stat(pairingPath);
-      return pairingPath;
+      try {
+        await stat(pairingPath);
+        log.debug({ method: "pairing-supervisorSessionId", file: pairingPath.split("/").pop() }, "resolveSupervisorJsonlPath");
+        // Update pairing with the discovered path
+        void updateSessionPairing(cwd, { supervisorJsonl: pairingPath });
+        return pairingPath;
+      } catch {
+        // fall through
+      }
     }
   } catch {
     // fall through
@@ -419,11 +440,15 @@ export async function resolveSupervisorJsonlPath(
     if (typeof supSessionId !== "string") return null;
     const exactPath = join(PROJECTS_DIR, projectDir, `${supSessionId}.jsonl`);
     await stat(exactPath);
+    log.debug({ method: "tmux-pid", file: exactPath.split("/").pop() }, "resolveSupervisorJsonlPath");
+    // Update pairing with the discovered path and sessionId
+    void updateSessionPairing(cwd, { supervisorJsonl: exactPath, supervisorSessionId: supSessionId });
     return exactPath;
   } catch {
     // fall through
   }
 
+  log.debug({ tmuxSession }, "resolveSupervisorJsonlPath: no JSONL found");
   return null;
 }
 

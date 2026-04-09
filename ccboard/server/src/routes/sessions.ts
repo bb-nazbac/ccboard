@@ -131,4 +131,18 @@ router.post("/:pid/send", async (req, res) => {
   }
 });
 
+// POST /api/sessions/:pid/kill — terminate a Claude session
+router.post("/:pid/kill", async (req, res) => {
+  const session = await findSession(Number(req.params.pid));
+  if (!session) { res.status(404).json({ error: "session not found" }); return; }
+
+  try {
+    process.kill(session.pid, "SIGTERM");
+    res.json({ ok: true });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message.slice(0, 200) : "unknown error";
+    res.status(500).json({ error: `failed to kill: ${msg}` });
+  }
+});
+
 export default router;

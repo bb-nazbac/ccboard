@@ -2,6 +2,7 @@ import { Router } from "express";
 import { readdir, readFile } from "fs/promises";
 import { join } from "path";
 import { getSessions } from "../services/session-reader.js";
+import { backfillPairing } from "../services/pairing.js";
 import { normaliseReport, watchReportsDir } from "../services/report-normaliser.js";
 import type { NormalisedReport } from "../schemas/reports.js";
 
@@ -23,6 +24,9 @@ router.get("/:pid/supervisor/reviews", async (req, res) => {
   const sessions = await getSessions();
   const session = sessions.find((s) => s.pid === pid);
   if (!session) { res.status(404).json({ error: "session not found" }); return; }
+
+  // Ensure pairing metadata is up to date before serving reviews
+  void backfillPairing(session.cwd);
 
   const reportsDir = join(session.cwd, ".ccboard", "reports");
 

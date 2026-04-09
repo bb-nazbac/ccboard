@@ -6,7 +6,9 @@ import { getSessions } from "../services/session-reader.js";
 import { resolveActiveJsonl } from "../services/jsonl-resolver.js";
 import { supervisors, reconnectSupervisor, resolveSupervisorJsonlPath } from "../services/supervisor-manager.js";
 import { isTmuxPaneWaiting } from "../services/tmux.js";
+import { createLogger } from "../lib/logger.js";
 
+const log = createLogger("sse");
 const router = Router();
 
 // --- Helpers ---
@@ -72,6 +74,7 @@ router.get("/:pid/stream", async (req: Request, res: Response) => {
   if (!jsonlPathRaw) { res.status(404).json({ error: "JSONL not found" }); return; }
   const jsonlPath = jsonlPathRaw; // narrow to string
 
+  log.info({ pid, jsonlPath: jsonlPath.split("/").pop() }, "agent stream connected");
   sseHeaders(res);
   send(res, { type: "connected" });
 
@@ -103,7 +106,7 @@ router.get("/:pid/stream", async (req: Request, res: Response) => {
 
   const interval = setInterval(sendNewEntries, 1000);
   sendNewEntries();
-  req.on("close", () => clearInterval(interval));
+  req.on("close", () => { clearInterval(interval); log.debug({ pid }, "agent stream disconnected"); });
 });
 
 // --- Supervisor stream ---

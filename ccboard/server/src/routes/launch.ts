@@ -9,13 +9,20 @@ import {
   isTmuxPaneWaiting,
   sendToTmuxSession,
 } from "../services/tmux.js";
-import { cwdToProjectDir, readSessionPairing, writeSessionPairing } from "../services/pairing.js";
+import {
+  cwdToProjectDir,
+  readSessionPairing,
+  writeSessionPairing,
+  detectJsonlForRole,
+} from "../services/pairing.js";
+import { createLogger } from "../lib/logger.js";
 import {
   TMUX_PREFIX,
   SESSIONS_DIR,
   PROJECTS_DIR,
 } from "../lib/constants.js";
 
+const log = createLogger("launch");
 const router = Router();
 
 /**
@@ -225,7 +232,27 @@ router.post("/launch", async (req, res) => {
       { timeout: 5000 },
     );
 
-    // Wait for both to register, then save pairing
+    // Write initial pairing immediately with what we know
+    const startedAt = new Date().toISOString();
+    {
+      const pairingRec = pairing as unknown as Record<string, unknown> | null;
+      const prevAgentSid = pairingRec?.agentSessionId as string | undefined;
+      const prevSupSid = pairingRec?.supervisorSessionId as string | undefined;
+      const initialAgentSid = resume && prevAgentSid ? prevAgentSid : sessionId;
+      const initialSupSid = resume && prevSupSid ? prevSupSid : undefined;
+
+      await writeSessionPairing(cwd, {
+        agentTmux,
+        agentSessionId: initialAgentSid,
+        agentPid: undefined,  // filled in by background task
+        supervisorTmux: supTmux,
+        supervisorSessionId: initialSupSid,
+        supervisorPid: undefined,
+        startedAt,
+      });
+    }
+
+    // Background task: wait for sessions to register, then fill in PIDs and sessionIds
     setTimeout(() => {
       void (async () => {
         try {
@@ -245,29 +272,92 @@ router.post("/launch", async (req, res) => {
             if (!resume) agentSid = data.sessionId as string;
           } catch { /* empty */ }
 
-          let supSid: string | null = null;
+          let supSid: string | undefined;
           try {
             const raw = await readFile(join(SESSIONS_DIR, `${supPanePid}.json`), "utf-8");
             supSid = (JSON.parse(raw) as Record<string, unknown>).sessionId as string;
           } catch { /* empty */ }
 
-          const pairingRec = pairing as unknown as Record<string, unknown> | null;
-          const prevAgentSid = pairingRec?.agentSessionId as string | undefined;
-          const prevSupSid = pairingRec?.supervisorSessionId as string | undefined;
+          const currentPairing = await readSessionPairing(cwd);
+          const prevAgentSid = currentPairing?.agentSessionId;
+          const prevSupSid = currentPairing?.supervisorSessionId;
           const finalAgentSid = resume && prevAgentSid ? prevAgentSid : agentSid;
           const finalSupSid = resume && prevSupSid ? prevSupSid : supSid;
 
-          if (finalAgentSid || finalSupSid) {
-            await writeSessionPairing(cwd, {
-              agentTmux,
-              supervisorTmux: supTmux,
-              supervisorSessionId: finalSupSid ?? undefined,
-              startedAt: new Date().toISOString(),
-            });
-          }
-        } catch { /* empty */ }
+          await writeSessionPairing(cwd, {
+            agentTmux,
+            agentPid: Number(agentPanePid) || undefined,
+            agentSessionId: finalAgentSid,
+            supervisorTmux: supTmux,
+            supervisorPid: Number(supPanePid) || undefined,
+            supervisorSessionId: finalSupSid,
+            startedAt,
+          });
+
+          log.debug({ agentSid: finalAgentSid?.slice(0, 8), supSid: finalSupSid?.slice(0, 8) }, "pairing PIDs and sessionIds written");
+        } catch (err) {
+          log.debug({ err }, "failed to write pairing PIDs");
+        }
       })();
     }, 8000);
+
+    // Background task: poll for JSONL files to appear and update pairing
+    const pollJsonl = (attempt: number): void => {
+      if (attempt > 10) return;  // give up after ~60s
+      setTimeout(() => {
+        void (async () => {
+          try {
+            const currentPairing = await readSessionPairing(cwd);
+            if (!currentPairing) return;
+            let dirty = false;
+
+            // Detect agent JSONL
+            if (!currentPairing.agentJsonl) {
+              const excludeIds = new Set<string>();
+              if (currentPairing.supervisorSessionId) excludeIds.add(currentPairing.supervisorSessionId);
+              const agentJsonl = await detectJsonlForRole(
+                cwd,
+                currentPairing.agentSessionId,
+                startedAt,
+                excludeIds,
+              );
+              if (agentJsonl) {
+                currentPairing.agentJsonl = agentJsonl;
+                dirty = true;
+                log.debug({ agentJsonl: agentJsonl.split("/").pop() }, "detected agent JSONL");
+              }
+            }
+
+            // Detect supervisor JSONL
+            if (!currentPairing.supervisorJsonl && currentPairing.supervisorSessionId) {
+              const supJsonl = await detectJsonlForRole(
+                cwd,
+                currentPairing.supervisorSessionId,
+                startedAt,
+                new Set<string>(),
+              );
+              if (supJsonl) {
+                currentPairing.supervisorJsonl = supJsonl;
+                dirty = true;
+                log.debug({ supervisorJsonl: supJsonl.split("/").pop() }, "detected supervisor JSONL");
+              }
+            }
+
+            if (dirty) {
+              await writeSessionPairing(cwd, currentPairing);
+            }
+
+            // If still missing either, keep polling
+            if (!currentPairing.agentJsonl || !currentPairing.supervisorJsonl) {
+              pollJsonl(attempt + 1);
+            }
+          } catch {
+            pollJsonl(attempt + 1);
+          }
+        })();
+      }, 6000);  // poll every 6 seconds
+    };
+    pollJsonl(0);
 
     // Send initial context to supervisor once ready
     const contextMsg = `You are now supervising the "${dirName}" session (${cwd}).
@@ -303,12 +393,15 @@ Then introduce yourself and tell me what you see in this project. Read the recen
           );
 
           const pairingData = await readSessionPairing(cwd);
-          const pairingRec = pairingData as unknown as Record<string, unknown> | null;
-          const agentJsonlId = pairingRec?.agentSessionId as string | undefined;
-          const projectDir = cwdToProjectDir(cwd);
-          const agentJsonlPath = agentJsonlId
-            ? join(PROJECTS_DIR, projectDir, `${agentJsonlId}.jsonl`)
-            : await findLargestJsonl(projectDir);
+          // Prefer the explicit agentJsonl from pairing, then fall back
+          let agentJsonlPath = pairingData?.agentJsonl ?? null;
+          if (!agentJsonlPath) {
+            const projectDir = cwdToProjectDir(cwd);
+            const agentJsonlId = pairingData?.agentSessionId;
+            agentJsonlPath = agentJsonlId
+              ? join(PROJECTS_DIR, projectDir, `${agentJsonlId}.jsonl`)
+              : await findLargestJsonl(projectDir, cwd);
+          }
 
           supervisors.set(agentPanePid, {
             tmuxSession: supTmux,
