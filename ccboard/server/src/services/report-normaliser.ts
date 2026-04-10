@@ -1,5 +1,3 @@
-import { readdir, readFile, writeFile, stat } from "fs/promises";
-import { join } from "path";
 import type { NormalisedReport, Finding, ReportStatus } from "../schemas/reports.js";
 
 /** Map raw verdict strings to canonical status values */
@@ -67,6 +65,14 @@ export function normaliseReport(raw: Record<string, unknown>): NormalisedReport 
   report.summary = summary;
 
   // --- findings (merge all finding arrays into one canonical array) ---
+  // If already normalised and findings array exists with _group tags, reuse it
+  if (raw._normalised && Array.isArray(raw.findings) && (raw.findings as Finding[]).length > 0
+      && (raw.findings as Finding[])[0]?._group) {
+    report.findings = (raw.findings as Finding[]).map(f => normaliseFinding(f as Record<string, unknown>));
+    report._normalised = true;
+    return report as unknown as NormalisedReport;
+  }
+
   const merged: Finding[] = [];
 
   for (const f of newFindings) merged.push({ ...normaliseFinding(f), _group: "new" });
@@ -135,40 +141,8 @@ function asArray(val: unknown): Record<string, unknown>[] {
   return Array.isArray(val) ? val : [];
 }
 
-// --- File watcher: normalise reports on disk ---
-
-const watchedDirs = new Set<string>();
-const mtimeCache = new Map<string, number>();
-
-/** Watch a .ccboard/reports directory and normalise any latest.json on change.
- *  Uses polling (fs.watch is unreliable on macOS). */
-export function watchReportsDir(reportsDir: string): void {
-  if (watchedDirs.has(reportsDir)) return;
-  watchedDirs.add(reportsDir);
-
-  setInterval(async () => {
-    try {
-      const dirs = await readdir(reportsDir);
-      for (const dir of dirs) {
-        const filePath = join(reportsDir, dir, "latest.json");
-        try {
-          const info = await stat(filePath);
-          const mtime = info.mtimeMs;
-          if (mtimeCache.get(filePath) === mtime) continue;
-          mtimeCache.set(filePath, mtime);
-
-          const raw = JSON.parse(await readFile(filePath, "utf-8")) as Record<string, unknown>;
-          if (raw._normalised) continue;
-
-          const normalised = normaliseReport(raw);
-          await writeFile(filePath, JSON.stringify(normalised, null, 2));
-          console.log(`[normaliser] normalised ${dir}/latest.json`);
-        } catch {
-          // File may not exist yet (e.g. test-suite/latest.json)
-        }
-      }
-    } catch {
-      // Reports dir may not exist yet
-    }
-  }, 5000);
+/** @deprecated — normalisation now happens on read only (in reviews endpoint).
+ *  File watcher removed to prevent infinite write loops. */
+export function watchReportsDir(_reportsDir: string): void {
+  // no-op — kept for API compatibility
 }

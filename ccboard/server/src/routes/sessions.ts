@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { execSync } from "child_process";
 import { getSessions } from "../services/session-reader.js";
-import { resolveHistoryJsonls, resolveJsonlForPid } from "../services/jsonl-resolver.js";
-import { readFullConversation, readFullConversationMulti } from "../services/jsonl-parser.js";
+import { resolveJsonlForPid } from "../services/jsonl-resolver.js";
+import { readFullConversation, tailFile } from "../services/jsonl-parser.js";
 import {
   extractActionTurns,
   extractMessageChain,
@@ -58,17 +58,21 @@ router.get("/:pid/diff", async (req, res) => {
   res.json({ diff, staged });
 });
 
-// GET /api/sessions/:pid/actions — all actions grouped by turn
+// GET /api/sessions/:pid/actions — recent actions grouped by turn
 router.get("/:pid/actions", async (req, res) => {
   const session = await findSession(Number(req.params.pid));
   if (!session) { res.status(404).json({ error: "session not found" }); return; }
 
-  const jsonlPaths = await resolveHistoryJsonls(session.pid, session.cwd, session.sessionId);
-  if (jsonlPaths.length === 0) { res.json([]); return; }
+  const limit = Number(req.query.limit) || 20;
 
-  const entries = await readFullConversationMulti(jsonlPaths);
+  const jsonlPath = await resolveJsonlForPid(session.pid, session.cwd, session.sessionId);
+  if (!jsonlPath) { res.json([]); return; }
+
+  // Read last 128KB — enough for ~20 turns of actions
+  const lines = await tailFile(jsonlPath, 128 * 1024);
+  const entries = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
   const turns = extractActionTurns(entries);
-  res.json(turns);
+  res.json(turns.slice(-limit));
 });
 
 // GET /api/sessions/:pid/messages — flat message chain
@@ -76,12 +80,17 @@ router.get("/:pid/messages", async (req, res) => {
   const session = await findSession(Number(req.params.pid));
   if (!session) { res.status(404).json({ error: "session not found" }); return; }
 
-  const jsonlPaths = await resolveHistoryJsonls(session.pid, session.cwd, session.sessionId);
-  if (jsonlPaths.length === 0) { res.json([]); return; }
+  const limit = Number(req.query.limit) || 100;
 
-  const entries = await readFullConversationMulti(jsonlPaths);
+  // Use tailFile for limited reads (much faster than reading full JSONL)
+  const jsonlPath = await resolveJsonlForPid(session.pid, session.cwd, session.sessionId);
+  if (!jsonlPath) { res.json([]); return; }
+
+  // Read last 256KB — enough for ~100 messages
+  const lines = await tailFile(jsonlPath, 256 * 1024);
+  const entries = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
   const messages = extractMessageChain(entries);
-  res.json(messages);
+  res.json(messages.slice(-limit));
 });
 
 // GET /api/sessions/:pid/context — context window info (token usage, turns, etc.)

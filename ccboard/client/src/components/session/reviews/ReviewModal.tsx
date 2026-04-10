@@ -10,15 +10,14 @@ interface ReviewModalProps {
 }
 
 export function ReviewModal({ report, open, onClose }: ReviewModalProps) {
-  if (!report) return null;
+  const isVerdict = report?.category === "verdict" || report?.category === "council-verdict";
 
-  const isVerdict = report.category === "verdict" || report.category === "council-verdict";
+  const councilScores = report?.council_scores || report?.council_status || report?.councilMembers;
 
-  const councilScores = report.council_scores || report.council_status || report.councilMembers;
-
-  const conflicts = report.conflicts_and_resolutions || report.conflicts || [];
+  const conflicts = report?.conflicts_and_resolutions || report?.conflicts || [];
 
   const grouped = useMemo(() => {
+    if (!report?.findings) return {};
     const groups: Record<string, Finding[]> = {};
     for (const f of report.findings) {
       const g = f._group || "Findings";
@@ -26,7 +25,9 @@ export function ReviewModal({ report, open, onClose }: ReviewModalProps) {
       groups[g].push(f);
     }
     return groups;
-  }, [report.findings]);
+  }, [report?.findings]);
+
+  if (!report) return null;
 
   const sectionTitle: React.CSSProperties = {
     fontFamily: "var(--font-heading)",
@@ -41,7 +42,7 @@ export function ReviewModal({ report, open, onClose }: ReviewModalProps) {
   };
 
   return (
-    <Modal open={open} onClose={onClose} title={report.category.toUpperCase()}>
+    <Modal open={open} onClose={onClose} title={(report.category ?? "REPORT").toUpperCase()}>
       {/* Summary */}
       <div
         style={{

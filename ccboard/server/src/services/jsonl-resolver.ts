@@ -52,12 +52,30 @@ export async function getSupervisorSessionIds(cwd?: string): Promise<Set<string>
   return ids;
 }
 
+// --- Cache for findLatestJsonl (5s TTL) ---
+const jsonlCache = new Map<string, { result: string | null; expiry: number }>();
+const JSONL_CACHE_TTL = 5000;
+
 /**
  * Find the most recently modified JSONL in a project directory.
  * Excludes JONLs belonging to supervisor sessions using pairing-based exclusion only
- * (NO content heuristics).
+ * (NO content heuristics). Cached with 5s TTL.
  */
 export async function findLatestJsonl(
+  projectDir: string,
+  cwd?: string,
+): Promise<string | null> {
+  const cacheKey = `${projectDir}:${cwd ?? ""}`;
+  const cached = jsonlCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiry) {
+    return cached.result;
+  }
+  const result = await findLatestJsonlUncached(projectDir, cwd);
+  jsonlCache.set(cacheKey, { result, expiry: Date.now() + JSONL_CACHE_TTL });
+  return result;
+}
+
+async function findLatestJsonlUncached(
   projectDir: string,
   cwd?: string,
 ): Promise<string | null> {

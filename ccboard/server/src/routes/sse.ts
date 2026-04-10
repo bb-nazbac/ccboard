@@ -113,16 +113,15 @@ router.get("/:pid/stream", async (req: Request, res: Response) => {
 
 router.get("/:pid/supervisor/stream", async (req: Request, res: Response) => {
   const pid = Number(req.params.pid);
-  let sup = supervisors.get(pid) ?? undefined;
-  if (!sup) {
-    const sessions = await getSessions();
-    const session = sessions.find((s) => s.pid === pid);
-    if (session) sup = (await reconnectSupervisor(pid, session)) ?? undefined;
-  }
-
   const sessions = await getSessions();
   const session = sessions.find((s) => s.pid === pid);
-  if (!session || !sup) { res.status(404).json({ error: "not found" }); return; }
+  if (!session) { res.status(404).json({ error: "session not found" }); return; }
+
+  let sup = supervisors.get(pid) ?? undefined;
+  if (!sup && session.managed) {
+    sup = (await reconnectSupervisor(pid, session)) ?? undefined;
+  }
+  if (!sup) { res.status(404).json({ error: "no supervisor" }); return; }
 
   const supJsonlPathRaw = await resolveSupervisorJsonlPath(session.cwd, sup.tmuxSession);
   if (!supJsonlPathRaw) { res.status(404).json({ error: "supervisor JSONL not found" }); return; }

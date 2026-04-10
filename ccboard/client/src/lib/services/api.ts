@@ -26,8 +26,8 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 
 export const getSessions = () => get<Session[]>("/api/sessions");
 export const getContext = (pid: number) => get<ContextInfo>(`/api/sessions/${pid}/context`);
-export const getMessages = (pid: number) => get<ChatMessage[]>(`/api/sessions/${pid}/messages`);
-export const getActions = (pid: number) => get<ActionTurn[]>(`/api/sessions/${pid}/actions`);
+export const getMessages = (pid: number, limit = 100) => get<ChatMessage[]>(`/api/sessions/${pid}/messages?limit=${limit}`);
+export const getActions = (pid: number, limit = 20) => get<ActionTurn[]>(`/api/sessions/${pid}/actions?limit=${limit}`);
 export const getDiff = (pid: number) => get<{ diff: string; staged: string }>(`/api/sessions/${pid}/diff`);
 export const sendMessage = (pid: number, message: string) =>
   post<{ ok: boolean; error?: string }>(`/api/sessions/${pid}/send`, { message });

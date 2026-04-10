@@ -107,7 +107,7 @@ router.post("/:pid/supervisor/start", async (req, res) => {
     // Check if we should resume a prior supervisor session
     const pairing = await readSessionPairing(session.cwd);
     const primaryTmux = session.managed ? session.tmuxSession : null;
-    const systemPrompt = buildSupervisorSystemPrompt(primaryTmux).replace(
+    const systemPrompt = buildSupervisorSystemPrompt(primaryTmux, session.cwd).replace(
       /"/g,
       '\\"',
     );

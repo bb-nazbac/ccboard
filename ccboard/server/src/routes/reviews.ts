@@ -41,13 +41,13 @@ router.get("/:pid/supervisor/reviews", async (req, res) => {
         const raw = JSON.parse(
           await readFile(join(reportsDir, dir, "latest.json"), "utf-8"),
         ) as Record<string, unknown>;
-        // Normalise on read if watcher hasn't caught it yet
-        const report: NormalisedReport = raw._normalised
-          ? (raw as unknown as NormalisedReport)
-          : normaliseReport(raw);
+        // Always normalise on read — agents may copy _normalised:true from old reports
+        // Inject category from directory name if missing in raw data
+        if (!raw.category) raw.category = dir;
+        const report: NormalisedReport = normaliseReport(raw);
 
         categories.push({
-          category: (report.category as string) || dir,
+          category: report.category || dir,
           status: report.status,
           summary: report.summary,
           findingCount: Array.isArray(report.findings) ? report.findings.length : 0,

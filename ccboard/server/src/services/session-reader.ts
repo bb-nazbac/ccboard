@@ -174,11 +174,37 @@ const STATUS_ORDER: Record<string, number> = {
   dead: 3,
 };
 
+// --- Background cache for getSessions ---
+// Refreshes every 2s in the background so requests always hit warm cache.
+let sessionsCache: Session[] = [];
+let cacheReady = false;
+
+async function refreshSessionsCache(): Promise<void> {
+  try {
+    sessionsCache = await getSessionsUncached();
+    cacheReady = true;
+  } catch {
+    // keep stale data on error
+  }
+}
+
+// Start background refresh loop
+void refreshSessionsCache();
+setInterval(() => void refreshSessionsCache(), 2000);
+
 /**
  * Read all session files and correlate with processes + JSONL context.
- * Returns sessions sorted by status priority then recency.
+ * Always returns from cache (refreshed every 2s in background).
  */
 export async function getSessions(): Promise<Session[]> {
+  if (!cacheReady) {
+    // First call before background has finished — wait for it
+    await refreshSessionsCache();
+  }
+  return sessionsCache;
+}
+
+async function getSessionsUncached(): Promise<Session[]> {
   const processes = getClaudeProcesses();
   let files: string[];
   try {
