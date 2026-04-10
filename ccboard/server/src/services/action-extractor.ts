@@ -46,6 +46,8 @@ export function parseToolAction(
     case "Agent":
       action.description = typeof inp.description === "string" ? inp.description : undefined;
       action.agentType = typeof inp.subagent_type === "string" ? inp.subagent_type : undefined;
+      action.prompt = typeof inp.prompt === "string" ? inp.prompt.slice(0, 5000) : undefined;
+      action.model = typeof inp.model === "string" ? inp.model : undefined;
       break;
     default:
       action.input = JSON.stringify(inp).slice(0, 300);

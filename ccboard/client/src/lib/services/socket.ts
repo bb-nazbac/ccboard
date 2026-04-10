@@ -29,6 +29,7 @@ interface Store {
   reviews: Map<number, ReviewCategory[]>;
   supervisorStatus: Map<number, SupervisorStatus>;
   supervisorMessages: Map<number, ChatMessage[]>;
+  supervisorActions: Map<number, ActionEventData[]>;
   context: Map<number, ContextInfo>;
   pane: Map<number, PaneState>;
   connected: boolean;
@@ -42,6 +43,7 @@ const store: Store = {
   reviews: new Map(),
   supervisorStatus: new Map(),
   supervisorMessages: new Map(),
+  supervisorActions: new Map(),
   context: new Map(),
   pane: new Map(),
   connected: false,
@@ -102,13 +104,14 @@ interface PaneStateData {
 }
 
 type ServerEvent =
-  | { type: "snapshot"; seq: number; sessions: Session[]; messages: Record<string, ChatMessage[]>; actions: Record<string, ActionEventData[]>; reviews: Record<string, ReviewCategoryData[]>; supervisorStatus: Record<string, SupervisorStatusData>; context: Record<string, ContextInfo>; supervisorMessages: Record<string, ChatMessage[]>; pane: Record<string, PaneStateData> }
+  | { type: "snapshot"; seq: number; sessions: Session[]; messages: Record<string, ChatMessage[]>; actions: Record<string, ActionEventData[]>; reviews: Record<string, ReviewCategoryData[]>; supervisorStatus: Record<string, SupervisorStatusData>; context: Record<string, ContextInfo>; supervisorMessages: Record<string, ChatMessage[]>; supervisorActions: Record<string, ActionEventData[]>; pane: Record<string, PaneStateData> }
   | { type: "sessions:update"; seq: number; sessions: Session[] }
   | { type: "messages:new"; seq: number; pid: number; messages: ChatMessage[] }
   | { type: "actions:new"; seq: number; pid: number; actions: ActionEventData[] }
   | { type: "reviews:update"; seq: number; pid: number; categories: ReviewCategoryData[] }
   | { type: "supervisor:status"; seq: number; pid: number; status: SupervisorStatusData }
   | { type: "supervisor:messages"; seq: number; pid: number; messages: ChatMessage[] }
+  | { type: "supervisor:actions"; seq: number; pid: number; actions: ActionEventData[] }
   | { type: "context:update"; seq: number; pid: number; context: ContextInfo }
   | { type: "pane:update"; seq: number; pid: number; pane: PaneStateData };
 
@@ -129,6 +132,16 @@ function toActionEvent(a: ActionEventData): ActionEvent {
     newString: a.newString,
     pattern: a.pattern,
     path: a.path,
+    // Agent-specific
+    prompt: (a as Record<string, unknown>).prompt as string | undefined,
+    subagentType: (a as Record<string, unknown>).subagentType as string | undefined,
+    model: (a as Record<string, unknown>).model as string | undefined,
+    // Grep extras
+    glob: (a as Record<string, unknown>).glob as string | undefined,
+    outputMode: (a as Record<string, unknown>).outputMode as string | undefined,
+    // Read extras
+    offset: (a as Record<string, unknown>).offset as string | undefined,
+    limit: (a as Record<string, unknown>).limit as string | undefined,
   };
 }
 
@@ -176,6 +189,7 @@ function handleEvent(event: ServerEvent): void {
       store.reviews = new Map();
       store.supervisorStatus = new Map();
       store.supervisorMessages = new Map();
+      store.supervisorActions = new Map();
       store.context = new Map();
       store.pane = new Map();
 
@@ -193,6 +207,9 @@ function handleEvent(event: ServerEvent): void {
       }
       for (const [pidStr, msgs] of Object.entries(event.supervisorMessages)) {
         store.supervisorMessages.set(Number(pidStr), msgs);
+      }
+      for (const [pidStr, acts] of Object.entries(event.supervisorActions ?? {})) {
+        store.supervisorActions.set(Number(pidStr), acts.map(toActionEvent));
       }
       for (const [pidStr, ctx] of Object.entries(event.context)) {
         store.context.set(Number(pidStr), ctx);
@@ -228,6 +245,12 @@ function handleEvent(event: ServerEvent): void {
       const existing = store.supervisorMessages.get(event.pid) ?? [];
       const merged = [...existing, ...event.messages].slice(-100);
       store.supervisorMessages.set(event.pid, merged);
+      break;
+    }
+    case "supervisor:actions": {
+      const existing = store.supervisorActions.get(event.pid) ?? [];
+      const merged = [...existing, ...event.actions.map(toActionEvent)].slice(-200);
+      store.supervisorActions.set(event.pid, merged);
       break;
     }
     case "context:update":
@@ -316,6 +339,16 @@ export function useContext(pid: number): ContextInfo | null {
 
 export function useSupervisorStatus(pid: number): SupervisorStatus | null {
   const getSnapshot = useCallback(() => store.supervisorStatus.get(pid) ?? null, [pid]);
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+export function useSupervisorActions(pid: number): ActionEvent[] {
+  const getSnapshot = useCallback(() => store.supervisorActions.get(pid) ?? EMPTY_ACTIONS, [pid]);
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+export function useAllSupervisorStatuses(): Map<number, SupervisorStatus> {
+  const getSnapshot = useCallback(() => store.supervisorStatus, []);
   return useSyncExternalStore(subscribe, getSnapshot);
 }
 

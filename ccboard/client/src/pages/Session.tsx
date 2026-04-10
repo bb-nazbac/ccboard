@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { navLog, renderLog } from "../lib/utils/logger";
 import { formatTokens } from "../lib/utils/time";
-import { useSessions, useContext, useSupervisorStatus } from "../lib/services/socket";
+import { useSessions, useContext, useSupervisorStatus, useAllSupervisorStatuses } from "../lib/services/socket";
 import { SupervisorPane } from "../components/session/supervisor/SupervisorPane";
 import { MessagesPane } from "../components/session/messages/MessagesPane";
 import { ActionsPane } from "../components/session/actions/ActionsPane";
@@ -21,29 +21,18 @@ export function Session({ pid }: SessionProps) {
 
   const currentSession = sessions.find((s) => s.pid === pid) || null;
   const supTmux = supervisorStatus?.tmuxSession ?? null;
+  const supervisorStatusMap = useAllSupervisorStatuses();
 
-  // Keyboard shortcuts: Shift+Left/Right to cycle sessions
+  // Block Cmd+Arrow browser back/forward (we handle navigation ourselves)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (!e.shiftKey || sessions.length < 2) return;
-      const idx = sessions.findIndex((s) => s.pid === pid);
-      if (idx === -1) return;
-
-      let next = -1;
-      if (e.key === "ArrowLeft") {
-        next = idx > 0 ? idx - 1 : sessions.length - 1;
-      } else if (e.key === "ArrowRight") {
-        next = idx < sessions.length - 1 ? idx + 1 : 0;
-      }
-
-      if (next >= 0) {
-        navLog.info("cycle session", sessions[next]?.pid);
-        window.location.href = `/session/${sessions[next]?.pid}`;
+      if ((e.metaKey || e.ctrlKey) && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+        e.preventDefault();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [sessions, pid]);
+  }, []);
 
   // Resizable panes
   const startDragLeft = useCallback(
@@ -136,30 +125,41 @@ export function Session({ pid }: SessionProps) {
             overflowX: "auto",
           }}
         >
-          {sessions.map((s) => (
-            <div
-              key={s.pid}
-              onClick={() => {
-                if (s.pid !== pid) {
-                  navLog.info("switch session", s.pid);
-                  window.location.href = `/session/${s.pid}`;
-                }
-              }}
-              style={{
-                padding: "0.4rem 0.75rem",
-                fontFamily: "var(--font-data)",
-                fontSize: "0.7rem",
-                letterSpacing: "0.04em",
-                color: s.pid === pid ? "var(--orange)" : "var(--text-dim)",
-                borderBottom: s.pid === pid ? "2px solid var(--orange)" : "2px solid transparent",
-                cursor: s.pid === pid ? "default" : "pointer",
-                whiteSpace: "nowrap",
-                flexShrink: 0,
-              }}
-            >
-              {s.shortName || `PID ${s.pid}`}
-            </div>
-          ))}
+          {sessions.map((s) => {
+            // "Waiting for me": session is waiting, recent activity (< 1hr), and supervisor is not working
+            const isWaiting = s.status === "waiting";
+            const recentActivity = s.lastActivity && (Date.now() - s.lastActivity) < 3600000;
+            const supSt = supervisorStatusMap.get(s.pid);
+            const supIdle = !supSt?.active || supSt?.isWaiting;
+            const needsAttention = isWaiting && recentActivity && supIdle && s.pid !== pid;
+
+            return (
+              <div
+                key={s.pid}
+                onClick={() => {
+                  if (s.pid !== pid) {
+                    navLog.info("switch session", s.pid);
+                    window.location.href = `/session/${s.pid}`;
+                  }
+                }}
+                style={{
+                  padding: "0.4rem 0.75rem",
+                  fontFamily: "var(--font-data)",
+                  fontSize: "0.7rem",
+                  letterSpacing: "0.04em",
+                  color: s.pid === pid ? "var(--orange)" : needsAttention ? "var(--text-bright)" : "var(--text-dim)",
+                  borderBottom: s.pid === pid ? "2px solid var(--orange)" : "2px solid transparent",
+                  cursor: s.pid === pid ? "default" : "pointer",
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
+                  position: "relative",
+                  animation: needsAttention ? "divisionBreathe 3s ease-in-out infinite" : "none",
+                }}
+              >
+                {s.shortName || `PID ${s.pid}`}
+              </div>
+            );
+          })}
         </div>
       </div>
 

@@ -29,6 +29,16 @@ export interface ActionEvent {
   newString?: string;
   pattern?: string;
   path?: string;
+  // Agent tool
+  prompt?: string;
+  subagentType?: string;
+  model?: string;
+  // Grep extras
+  glob?: string;
+  outputMode?: string;
+  // Read extras
+  offset?: string;
+  limit?: string;
 }
 
 export interface ThinkingEvent {

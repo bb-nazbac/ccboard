@@ -77,6 +77,8 @@ export const ToolActionSchema = z.object({
   oldString: z.string().optional(),
   newString: z.string().optional(),
   agentType: z.string().optional(),
+  prompt: z.string().optional(),
+  model: z.string().optional(),
   input: z.string().optional(),
 });
 export type ToolAction = z.infer<typeof ToolActionSchema>;

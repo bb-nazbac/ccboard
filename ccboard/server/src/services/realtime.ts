@@ -51,6 +51,30 @@ interface ActionEventData {
   path?: string;
 }
 
+/** Extract a rich ActionEventData from a raw tool_use content block */
+function parseActionFromBlock(block: Record<string, unknown>, timestamp?: string): ActionEventData | null {
+  if (block.type !== "tool_use") return null;
+  const inp = (block.input ?? {}) as Record<string, string>;
+  const name = block.name as string;
+  let detail = "";
+  switch (name) {
+    case "Bash": detail = inp.description ?? inp.command?.slice(0, 120) ?? ""; break;
+    case "Read": case "Write": case "Edit": detail = inp.file_path ?? ""; break;
+    case "Grep": detail = `/${inp.pattern ?? ""}/ ${inp.path ?? ""}`; break;
+    case "Glob": detail = inp.pattern ?? ""; break;
+    case "Agent": detail = inp.description ?? inp.prompt?.slice(0, 80) ?? ""; break;
+    default: detail = name;
+  }
+  const evt: ActionEventData = { type: "action", tool: name, detail, timestamp };
+  if (name === "Edit") { evt.filePath = inp.file_path; evt.oldString = inp.old_string?.slice(0, 5000); evt.newString = inp.new_string?.slice(0, 5000); }
+  if (name === "Write") { evt.filePath = inp.file_path; evt.newString = inp.content?.slice(0, 5000); }
+  if (name === "Bash") { evt.command = inp.command; evt.description = inp.description; }
+  if (name === "Grep") { evt.pattern = inp.pattern; evt.path = inp.path; (evt as unknown as Record<string, unknown>).glob = inp.glob; (evt as unknown as Record<string, unknown>).outputMode = inp.output_mode; }
+  if (name === "Read") { evt.filePath = inp.file_path; (evt as unknown as Record<string, unknown>).offset = inp.offset; (evt as unknown as Record<string, unknown>).limit = inp.limit; }
+  if (name === "Agent") { (evt as unknown as Record<string, unknown>).prompt = inp.prompt?.slice(0, 5000); (evt as unknown as Record<string, unknown>).subagentType = inp.subagent_type; (evt as unknown as Record<string, unknown>).model = inp.model; }
+  return evt;
+}
+
 interface ReviewCategoryData {
   category: string;
   status: string;
@@ -78,13 +102,14 @@ interface PaneStateData {
 }
 
 type ServerEvent =
-  | { type: "snapshot"; seq: number; sessions: Session[]; messages: Record<string, ChatMessage[]>; actions: Record<string, ActionEventData[]>; reviews: Record<string, ReviewCategoryData[]>; supervisorStatus: Record<string, SupervisorStatusData>; context: Record<string, ContextInfo>; supervisorMessages: Record<string, ChatMessage[]>; pane: Record<string, PaneStateData> }
+  | { type: "snapshot"; seq: number; sessions: Session[]; messages: Record<string, ChatMessage[]>; actions: Record<string, ActionEventData[]>; reviews: Record<string, ReviewCategoryData[]>; supervisorStatus: Record<string, SupervisorStatusData>; context: Record<string, ContextInfo>; supervisorMessages: Record<string, ChatMessage[]>; supervisorActions: Record<string, ActionEventData[]>; pane: Record<string, PaneStateData> }
   | { type: "sessions:update"; seq: number; sessions: Session[] }
   | { type: "messages:new"; seq: number; pid: number; messages: ChatMessage[] }
   | { type: "actions:new"; seq: number; pid: number; actions: ActionEventData[] }
   | { type: "reviews:update"; seq: number; pid: number; categories: ReviewCategoryData[] }
   | { type: "supervisor:status"; seq: number; pid: number; status: SupervisorStatusData }
   | { type: "supervisor:messages"; seq: number; pid: number; messages: ChatMessage[] }
+  | { type: "supervisor:actions"; seq: number; pid: number; actions: ActionEventData[] }
   | { type: "context:update"; seq: number; pid: number; context: ContextInfo }
   | { type: "pane:update"; seq: number; pid: number; pane: PaneStateData };
 
@@ -99,6 +124,7 @@ const reviewsMap = new Map<number, ReviewCategoryData[]>();
 const supervisorStatusMap = new Map<number, SupervisorStatusData>();
 const contextMap = new Map<number, ContextInfo>();
 const supervisorMessagesMap = new Map<number, ChatMessage[]>();
+const supervisorActionsMap = new Map<number, ActionEventData[]>();
 const paneMap = new Map<number, PaneStateData>();
 
 // Sequence counter + ring buffer for replay
@@ -161,6 +187,10 @@ export function getRealtimeSupervisorMessages(pid: number): ChatMessage[] {
   return supervisorMessagesMap.get(pid) ?? [];
 }
 
+export function getRealtimeSupervisorActions(pid: number): ActionEventData[] {
+  return supervisorActionsMap.get(pid) ?? [];
+}
+
 // ---------------------------------------------------------------------------
 // Socket.IO server
 // ---------------------------------------------------------------------------
@@ -179,6 +209,7 @@ function buildSnapshot(): ServerEvent {
   const supStatus: Record<string, SupervisorStatusData> = {};
   const context: Record<string, ContextInfo> = {};
   const supMessages: Record<string, ChatMessage[]> = {};
+  const supActions: Record<string, ActionEventData[]> = {};
   const pane: Record<string, PaneStateData> = {};
 
   for (const s of currentSessions) {
@@ -195,6 +226,8 @@ function buildSnapshot(): ServerEvent {
     if (ctx) context[String(pid)] = ctx;
     const sm = supervisorMessagesMap.get(pid);
     if (sm) supMessages[String(pid)] = sm;
+    const sa = supervisorActionsMap.get(pid);
+    if (sa) supActions[String(pid)] = sa;
     const p = paneMap.get(pid);
     if (p) pane[String(pid)] = p;
   }
@@ -209,6 +242,7 @@ function buildSnapshot(): ServerEvent {
     supervisorStatus: supStatus,
     context,
     supervisorMessages: supMessages,
+    supervisorActions: supActions,
     pane,
   };
 }
@@ -312,7 +346,7 @@ async function watchJsonl(): Promise<void> {
         for (const turn of turns.slice(-20)) {
           for (const a of turn.actions) {
             if (a.type === "tool_use" && a.tool) {
-              flat.push({
+              const evt: ActionEventData = {
                 type: "action",
                 tool: a.tool,
                 detail: a.text ?? a.description ?? "",
@@ -324,7 +358,14 @@ async function watchJsonl(): Promise<void> {
                 newString: a.newString,
                 pattern: a.pattern,
                 path: a.path,
-              });
+              };
+              // Pass through Agent-specific fields
+              if (a.tool === "Agent") {
+                (evt as unknown as Record<string, unknown>).prompt = a.prompt;
+                (evt as unknown as Record<string, unknown>).subagentType = a.agentType;
+                (evt as unknown as Record<string, unknown>).model = a.model;
+              }
+              flat.push(evt);
             }
           }
         }
@@ -373,28 +414,8 @@ async function watchJsonl(): Promise<void> {
             const content = msg?.content;
             if (Array.isArray(content)) {
               for (const block of content as Record<string, unknown>[]) {
-                if (block.type === "tool_use") {
-                  const inp = (block.input ?? {}) as Record<string, string>;
-                  const name = block.name as string;
-                  let detail = "";
-                  switch (name) {
-                    case "Bash": detail = inp.description ?? inp.command?.slice(0, 120) ?? ""; break;
-                    case "Read": case "Write": case "Edit": detail = inp.file_path ?? ""; break;
-                    case "Grep": detail = `/${inp.pattern ?? ""}/ ${inp.path ?? ""}`; break;
-                    case "Glob": detail = inp.pattern ?? ""; break;
-                    case "Agent": detail = inp.description ?? inp.prompt?.slice(0, 80) ?? ""; break;
-                    default: detail = name;
-                  }
-                  const actionEvt: ActionEventData = {
-                    type: "action", tool: name, detail, timestamp: entry.timestamp as string | undefined,
-                  };
-                  if (name === "Edit") { actionEvt.filePath = inp.file_path; actionEvt.oldString = inp.old_string?.slice(0, 2000); actionEvt.newString = inp.new_string?.slice(0, 2000); }
-                  if (name === "Write") { actionEvt.filePath = inp.file_path; actionEvt.newString = inp.content?.slice(0, 2000); }
-                  if (name === "Bash") { actionEvt.command = inp.command; actionEvt.description = inp.description; }
-                  if (name === "Grep") { actionEvt.pattern = inp.pattern; actionEvt.path = inp.path; }
-                  if (name === "Read") { actionEvt.filePath = inp.file_path; }
-                  newActions.push(actionEvt);
-                }
+                const actionEvt = parseActionFromBlock(block, entry.timestamp as string | undefined);
+                if (actionEvt) newActions.push(actionEvt);
               }
             }
           }
@@ -558,11 +579,33 @@ async function watchSupervisors(): Promise<void> {
         if (!supPath) continue;
         supJsonlPaths.set(pid, supPath);
 
-        // Load initial messages
+        // Load initial messages + actions from tail of JSONL
         try {
           const raw = await readFile(supPath, "utf-8");
           const msgs = extractSupervisorMessages(raw, 50);
           supervisorMessagesMap.set(pid, msgs);
+
+          // Extract recent actions from last 128KB
+          const recentLines = await tailFile(supPath, 128 * 1024);
+          const supActions: ActionEventData[] = [];
+          for (const line of recentLines) {
+            try {
+              const entry = JSON.parse(line) as Record<string, unknown>;
+              if (entry.type !== "assistant") continue;
+              const msg = entry.message as Record<string, unknown> | undefined;
+              const content = msg?.content;
+              if (!Array.isArray(content)) continue;
+              for (const block of content as Record<string, unknown>[]) {
+                const actionEvt = parseActionFromBlock(block, entry.timestamp as string | undefined);
+                if (actionEvt) supActions.push(actionEvt);
+              }
+            } catch { /* skip */ }
+          }
+          if (supActions.length > 0) {
+            supervisorActionsMap.set(pid, supActions.slice(-200));
+            log.debug({ pid, count: supActions.length }, "loaded initial supervisor actions");
+          }
+
           const info = await stat(supPath);
           supJsonlSizes.set(pid, info.size);
         } catch {
@@ -580,6 +623,7 @@ async function watchSupervisors(): Promise<void> {
       supJsonlSizes.set(pid, newSize);
 
       const newMessages: ChatMessage[] = [];
+      const newSupActions: ActionEventData[] = [];
       for (const line of lines) {
         try {
           const entry = JSON.parse(line) as Record<string, unknown>;
@@ -590,6 +634,16 @@ async function watchSupervisors(): Promise<void> {
           if (entry.type === "assistant") {
             const text = extractAssistantText(entry);
             if (text) newMessages.push({ role: "assistant", text, timestamp: entry.timestamp as string | undefined });
+
+            // Extract tool actions from supervisor
+            const msg = entry.message as Record<string, unknown> | undefined;
+            const content = msg?.content;
+            if (Array.isArray(content)) {
+              for (const block of content as Record<string, unknown>[]) {
+                const actionEvt = parseActionFromBlock(block, entry.timestamp as string | undefined);
+                if (actionEvt) newSupActions.push(actionEvt);
+              }
+            }
           }
         } catch {
           // skip
@@ -602,6 +656,14 @@ async function watchSupervisors(): Promise<void> {
         supervisorMessagesMap.set(pid, merged);
         broadcast({ type: "supervisor:messages", seq: nextSeq(), pid, messages: newMessages });
         log.debug({ pid, count: newMessages.length }, "supervisor:messages");
+      }
+
+      if (newSupActions.length > 0) {
+        const existing = supervisorActionsMap.get(pid) ?? [];
+        const merged = [...existing, ...newSupActions].slice(-200);
+        supervisorActionsMap.set(pid, merged);
+        broadcast({ type: "supervisor:actions", seq: nextSeq(), pid, actions: newSupActions });
+        log.debug({ pid, count: newSupActions.length }, "supervisor:actions");
       }
     } catch {
       // skip
