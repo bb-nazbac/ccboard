@@ -1,12 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { ChatMessage as ChatMessageType } from "../../../lib/types/api";
-import type { AgentMessageEvent, PaneEvent } from "../../../lib/types/sse-events";
-import { getMessages, sendMessage } from "../../../lib/services/api";
-import { createSSE } from "../../../lib/services/sse";
-import { apiLog, sseLog, renderLog } from "../../../lib/utils/logger";
+import { sendMessage } from "../../../lib/services/api";
+import { useMessages, usePaneState } from "../../../lib/services/socket";
+import { apiLog, renderLog } from "../../../lib/utils/logger";
 import { ChatMessage } from "./ChatMessage";
-
-const MAX_MESSAGES = 100;
 
 interface MessagesPaneProps {
   pid: number;
@@ -15,62 +12,15 @@ interface MessagesPaneProps {
 }
 
 export function MessagesPane({ pid, tmuxSession, tty }: MessagesPaneProps) {
-  const [messages, setMessages] = useState<ChatMessageType[]>([]);
-  const [workingText, setWorkingText] = useState<string | null>(null);
+  const messages = useMessages(pid);
+  const paneState = usePaneState(pid);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
-  const [status, setStatus] = useState<string>("idle");
   const scrollRef = useRef<HTMLDivElement>(null);
   const managed = !!tmuxSession;
 
-  // Load historical messages
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const msgs = await getMessages(pid);
-        if (cancelled) return;
-        setMessages(msgs.slice(-MAX_MESSAGES));
-        apiLog.debug("messages loaded", msgs.length);
-      } catch (err) {
-        apiLog.warn("messages fetch failed", err);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [pid]);
-
-  // SSE for new messages
-  useEffect(() => {
-    const sse = createSSE<AgentMessageEvent>(
-      `/api/sessions/${pid}/stream`,
-      (data) => {
-        if (data.type === "message") {
-          sseLog.debug("agent msg", data.role);
-          setMessages((prev) => {
-            const next = [...prev, { role: data.role, text: data.text, timestamp: data.timestamp }];
-            return next.length > MAX_MESSAGES ? next.slice(-MAX_MESSAGES) : next;
-          });
-        }
-      }
-    );
-    sse.connect();
-    return () => sse.disconnect();
-  }, [pid]);
-
-  // SSE for pane status / working text
-  useEffect(() => {
-    const sse = createSSE<PaneEvent>(
-      `/api/sessions/${pid}/pane-stream`,
-      (data) => {
-        if (data.type === "pane") {
-          setStatus(data.status);
-          setWorkingText(data.workingText || null);
-        }
-      }
-    );
-    sse.connect();
-    return () => sse.disconnect();
-  }, [pid]);
+  const status = paneState?.status ?? "idle";
+  const workingText = paneState?.workingText ?? null;
 
   // Auto-scroll
   useEffect(() => {

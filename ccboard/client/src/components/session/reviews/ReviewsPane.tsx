@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import type { ReviewCategory, NormalisedReport } from "../../../lib/types/reports";
-import { getReviews } from "../../../lib/services/api";
-import { apiLog, renderLog } from "../../../lib/utils/logger";
+import { useReviews } from "../../../lib/services/socket";
+import { renderLog } from "../../../lib/utils/logger";
 import { ReviewRow } from "./ReviewRow";
 import { ReviewModal } from "./ReviewModal";
 
@@ -10,25 +10,9 @@ interface ReviewsPaneProps {
 }
 
 export function ReviewsPane({ pid }: ReviewsPaneProps) {
-  const [categories, setCategories] = useState<ReviewCategory[]>([]);
+  const categories = useReviews(pid);
   const [selectedReport, setSelectedReport] = useState<NormalisedReport | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
-
-  const fetchReviews = useCallback(async () => {
-    try {
-      const data = await getReviews(pid);
-      setCategories(data.categories || []);
-      apiLog.debug("reviews loaded", data.categories?.length);
-    } catch (err) {
-      apiLog.warn("reviews fetch failed", err);
-    }
-  }, [pid]);
-
-  useEffect(() => {
-    fetchReviews();
-    const iv = setInterval(fetchReviews, 15000);
-    return () => clearInterval(iv);
-  }, [fetchReviews]);
 
   const handleClick = useCallback((cat: ReviewCategory) => {
     renderLog.debug("review click", cat.category);

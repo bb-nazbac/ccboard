@@ -1,7 +1,8 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback } from "react";
 import type { Session as SessionType } from "../lib/types/session";
 import type { ResumableSession } from "../lib/types/api";
-import { getSessions, killSession, getResumable, launchSession } from "../lib/services/api";
+import { killSession, getResumable, launchSession } from "../lib/services/api";
+import { useSessions } from "../lib/services/socket";
 import { apiLog, navLog } from "../lib/utils/logger";
 import { timeAgo } from "../lib/utils/time";
 import { Modal } from "../components/shared/Modal";
@@ -14,25 +15,13 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export function Dashboard() {
-  const [sessions, setSessions] = useState<SessionType[]>([]);
+  const sessions = useSessions();
   const [showNewModal, setShowNewModal] = useState(false);
   const [showResumeModal, setShowResumeModal] = useState(false);
   const [resumable, setResumable] = useState<ResumableSession[]>([]);
   const [newCwd, setNewCwd] = useState("");
   const [launching, setLaunching] = useState(false);
   const [expandedProject, setExpandedProject] = useState<string | null>(null);
-
-  const fetchSessions = useCallback(async () => {
-    try {
-      setSessions(await getSessions());
-    } catch (err) { apiLog.warn("sessions fetch failed", err); }
-  }, []);
-
-  useEffect(() => {
-    fetchSessions();
-    const iv = setInterval(fetchSessions, 3000);
-    return () => clearInterval(iv);
-  }, [fetchSessions]);
 
   const summary = useMemo(() => ({
     waiting: sessions.filter((s) => s.status === "waiting").length,
@@ -42,7 +31,7 @@ export function Dashboard() {
 
   const handleKill = useCallback(async (e: React.MouseEvent, pid: number) => {
     e.stopPropagation();
-    try { await killSession(pid); setSessions((p) => p.filter((s) => s.pid !== pid)); } catch (err) { apiLog.error("kill failed", err); }
+    try { await killSession(pid); } catch (err) { apiLog.error("kill failed", err); }
   }, []);
 
   const openResumeModal = useCallback(async () => {
@@ -66,21 +55,21 @@ export function Dashboard() {
     setLaunching(true);
     try {
       const res = await launchSession(newCwd.trim());
-      if (res.ok) { setShowNewModal(false); setNewCwd(""); fetchSessions(); }
+      if (res.ok) { setShowNewModal(false); setNewCwd(""); }
       else { apiLog.error("launch failed", res.error); }
     } catch (err) { apiLog.error("launch error", err); }
     finally { setLaunching(false); }
-  }, [newCwd, launching, fetchSessions]);
+  }, [newCwd, launching]);
 
   const handleResume = useCallback(async (s: ResumableSession) => {
     setLaunching(true);
     try {
       const res = await launchSession(s.cwd, { resume: true, sessionId: s.sessionId });
-      if (res.ok) { setShowResumeModal(false); fetchSessions(); }
+      if (res.ok) { setShowResumeModal(false); }
       else { apiLog.error("resume failed", res.error); }
     } catch (err) { apiLog.error("resume error", err); }
     finally { setLaunching(false); }
-  }, [fetchSessions]);
+  }, []);
 
   const S: Record<string, React.CSSProperties> = {
     root: { display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" },

@@ -1,14 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { ChatMessage as ChatMessageType } from "../../../lib/types/api";
-import type { SupervisorStreamEvent } from "../../../lib/types/sse-events";
 import {
-  getSupervisorStatus,
-  getSupervisorMessages,
   sendSupervisorMessage,
   startSupervisor,
 } from "../../../lib/services/api";
-import { createSSE } from "../../../lib/services/sse";
-import { apiLog, sseLog, renderLog } from "../../../lib/utils/logger";
+import { useSupervisorStatus, useSupervisorMessages } from "../../../lib/services/socket";
+import { apiLog, renderLog } from "../../../lib/utils/logger";
 import { ChatMessage } from "../messages/ChatMessage";
 
 interface SupervisorPaneProps {
@@ -17,56 +13,15 @@ interface SupervisorPaneProps {
 }
 
 export function SupervisorPane({ pid, tmuxSession }: SupervisorPaneProps) {
-  const [messages, setMessages] = useState<ChatMessageType[]>([]);
-  const [isActive, setIsActive] = useState(false);
-  const [isWaiting, setIsWaiting] = useState(false);
+  const supervisorStatus = useSupervisorStatus(pid);
+  const messages = useSupervisorMessages(pid);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [starting, setStarting] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Load status + initial messages
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const status = await getSupervisorStatus(pid);
-        if (cancelled) return;
-        setIsActive(status.active);
-        setIsWaiting(status.isWaiting || false);
-        apiLog.debug("supervisor status", status);
-
-        if (status.active) {
-          const msgs = await getSupervisorMessages(pid, 50);
-          if (cancelled) return;
-          setMessages(msgs);
-          apiLog.debug("supervisor messages loaded", msgs.length);
-        }
-      } catch (err) {
-        apiLog.warn("supervisor status failed", err);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [pid]);
-
-  // SSE
-  useEffect(() => {
-    if (!isActive) return;
-
-    const sse = createSSE<SupervisorStreamEvent>(
-      `/api/sessions/${pid}/supervisor/stream`,
-      (data) => {
-        if (data.type === "message") {
-          sseLog.debug("supervisor msg", data.role);
-          setMessages((prev) => [...prev, { role: data.role, text: data.text, timestamp: data.timestamp }]);
-        } else if (data.type === "status") {
-          setIsWaiting(data.isWaiting);
-        }
-      }
-    );
-    sse.connect();
-    return () => sse.disconnect();
-  }, [pid, isActive]);
+  const isActive = supervisorStatus?.active ?? false;
+  const isWaiting = supervisorStatus?.isWaiting ?? false;
 
   // Auto-scroll
   useEffect(() => {
@@ -82,7 +37,6 @@ export function SupervisorPane({ pid, tmuxSession }: SupervisorPaneProps) {
     try {
       await sendSupervisorMessage(pid, text);
       setInput("");
-      setIsWaiting(false);
     } catch (err) {
       apiLog.error("supervisor send failed", err);
     } finally {
@@ -95,7 +49,6 @@ export function SupervisorPane({ pid, tmuxSession }: SupervisorPaneProps) {
     try {
       const res = await startSupervisor(pid);
       apiLog.info("supervisor started", res);
-      setIsActive(true);
     } catch (err) {
       apiLog.error("supervisor start failed", err);
     } finally {

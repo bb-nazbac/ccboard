@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { Session as SessionType, ContextInfo } from "../lib/types/session";
-import { getSessions, getContext, getSupervisorStatus } from "../lib/services/api";
-import { apiLog, navLog, renderLog } from "../lib/utils/logger";
+import { navLog, renderLog } from "../lib/utils/logger";
 import { formatTokens } from "../lib/utils/time";
+import { useSessions, useContext, useSupervisorStatus } from "../lib/services/socket";
 import { SupervisorPane } from "../components/session/supervisor/SupervisorPane";
 import { MessagesPane } from "../components/session/messages/MessagesPane";
 import { ActionsPane } from "../components/session/actions/ActionsPane";
@@ -13,58 +12,15 @@ interface SessionProps {
 }
 
 export function Session({ pid }: SessionProps) {
-  const [sessions, setSessions] = useState<SessionType[]>([]);
-  const [context, setContext] = useState<ContextInfo | null>(null);
-  const [supTmux, setSupTmux] = useState<string | null>(null);
+  const sessions = useSessions();
+  const context = useContext(pid);
+  const supervisorStatus = useSupervisorStatus(pid);
   const [leftWidth, setLeftWidth] = useState(25);
   const [rightWidth, setRightWidth] = useState(35);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const currentSession = sessions.find((s) => s.pid === pid) || null;
-
-  // Load sessions list for tab bar
-  useEffect(() => {
-    const fetch = async () => {
-      try {
-        const data = await getSessions();
-        setSessions(data);
-      } catch (err) {
-        apiLog.warn("sessions fetch failed", err);
-      }
-    };
-    fetch();
-    const iv = setInterval(fetch, 5000);
-    return () => clearInterval(iv);
-  }, []);
-
-  // Load context
-  useEffect(() => {
-    const fetch = async () => {
-      try {
-        const ctx = await getContext(pid);
-        setContext(ctx);
-        apiLog.debug("context loaded", ctx);
-      } catch (err) {
-        apiLog.warn("context fetch failed", err);
-      }
-    };
-    fetch();
-    const iv = setInterval(fetch, 5000);
-    return () => clearInterval(iv);
-  }, [pid]);
-
-  // Load supervisor status for tmux session
-  useEffect(() => {
-    (async () => {
-      try {
-        const status = await getSupervisorStatus(pid);
-        setSupTmux(status.tmuxSession || null);
-        apiLog.debug("supervisor tmux", status.tmuxSession);
-      } catch (err) {
-        apiLog.warn("supervisor status failed", err);
-      }
-    })();
-  }, [pid]);
+  const supTmux = supervisorStatus?.tmuxSession ?? null;
 
   // Keyboard shortcuts: Shift+Left/Right to cycle sessions
   useEffect(() => {
@@ -81,8 +37,8 @@ export function Session({ pid }: SessionProps) {
       }
 
       if (next >= 0) {
-        navLog.info("cycle session", sessions[next].pid);
-        window.location.href = `/session/${sessions[next].pid}`;
+        navLog.info("cycle session", sessions[next]?.pid);
+        window.location.href = `/session/${sessions[next]?.pid}`;
       }
     };
     window.addEventListener("keydown", handler);
