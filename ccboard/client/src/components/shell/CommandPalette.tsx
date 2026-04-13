@@ -24,6 +24,30 @@ export function CommandPalette() {
         },
       },
       {
+        id: "new-feature",
+        label: "New Feature",
+        action: () => {
+          renderLog.info("command: new-feature");
+          window.dispatchEvent(new CustomEvent("ccboard:new-feature"));
+        },
+      },
+      {
+        id: "complete-feature",
+        label: "Complete Feature",
+        action: () => {
+          renderLog.info("command: complete-feature");
+          window.dispatchEvent(new CustomEvent("ccboard:complete-feature"));
+        },
+      },
+      {
+        id: "switch-feature",
+        label: "Switch Feature",
+        action: () => {
+          renderLog.info("command: switch-feature");
+          window.dispatchEvent(new CustomEvent("ccboard:switch-feature"));
+        },
+      },
+      {
         id: "toggle-theme",
         label: "Toggle Theme",
         action: () => {

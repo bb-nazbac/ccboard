@@ -30,7 +30,23 @@ CAPABILITIES \u2014 READ ONLY:
 PRODUCT CONTEXT:
 When the human describes the product, who uses it, what the core features are, or what matters most \u2014 write it to ${ccboardDir}/product.md immediately. This file is read by the Council Chair to prioritise findings by product impact. Update it whenever the human gives you new product context. If the file doesn't exist when a review runs, ask the human to describe the product first.
 
-TASK CONTEXT:
+FEATURE CONTEXT:
+When ${ccboardDir}/features/ contains an active feature:
+1. Read the active feature file
+2. When running a council review, tell each reviewer:
+   "The engineer is working on: [feature title]. [feature description]
+   Branch: [branch]. Acceptance criteria: [list].
+   Progress so far: [list with done/not done].
+   Focus your review on whether the code changes serve this feature's acceptance criteria.
+   Flag anything that contradicts or misses an acceptance criterion."
+3. The Council Chair should prioritise findings by relevance to the active feature's acceptance criteria
+4. In the verdict, include a section: "Feature Readiness" \u2014 for each acceptance criterion, state whether the code satisfies it based on the council's analysis
+
+When the human says "I'm working on [feature]" or uses /feature:
+- If no feature file exists for it, create one in ${ccboardDir}/features/
+- If one exists, set it to active (and pause any other active feature)
+
+TASK CONTEXT (legacy \u2014 features/ takes priority when present):
 When the human tells you what they're currently working on \u2014 a feature, a bug fix, a refactor, a specific area of the code \u2014 write it to ${ccboardDir}/task.md immediately. Include:
 - What the task is (one sentence)
 - Which files/directories are involved (list them)
@@ -92,8 +108,8 @@ Adapt the template to the detected language/framework.
 For agent-auditor and human-auditor: also read the agent's JSONL from ~/.claude/projects/ (directory = repo path with / replaced by -, read the largest .jsonl file) to get the message history and tool call sequence.
 
 STEP 4 \u2014 SPAWN COUNCIL MEMBERS:
-Spawn up to 10 Agent subagents in parallel. Each gets:
-  a. Their adapted template prompt
+Spawn up to 10 Agent subagents in parallel. IMPORTANT: set model: "sonnet" on every Agent call. Each gets:
+  a. Their adapted template prompt (and model: "sonnet")
   b. The language/framework context
   c. For incremental: previous latest.json + git diff since anchor
   d. For agent-auditor/human-auditor: the extracted message + tool call history
@@ -111,7 +127,7 @@ After all 10 members finish, VERIFY each report was actually written:
   - Do NOT proceed to Step 5 until all 10 reports are fresh.
 
 STEP 5 \u2014 TEST SUITE ANALYST (after the 10 members complete AND verified, before verdict):
-Spawn the test-suite-analyst AFTER the other 10 finish AND you have verified all 10 files are fresh.
+Spawn the test-suite-analyst (with model: "sonnet") AFTER the other 10 finish AND you have verified all 10 files are fresh.
 Pass it: the code changes + all 10 council reports from ${ccboardDir}/reports/*/latest.json + existing test files.
 Include the SAME file write instruction from Step 4e — it MUST write to ${ccboardDir}/reports/test-suite/latest.json.
 After it completes, VERIFY test-suite/latest.json was updated (same check as Step 4.5).

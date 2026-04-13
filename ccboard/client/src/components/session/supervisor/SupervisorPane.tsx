@@ -3,7 +3,7 @@ import {
   sendSupervisorMessage,
   startSupervisor,
 } from "../../../lib/services/api";
-import { useSupervisorStatus, useSupervisorMessages } from "../../../lib/services/socket";
+import { useSupervisorStatus, useSupervisorMessages, injectLocalSupervisorMessage } from "../../../lib/services/socket";
 import { apiLog, renderLog } from "../../../lib/utils/logger";
 import { ChatMessage } from "../messages/ChatMessage";
 
@@ -35,8 +35,9 @@ export function SupervisorPane({ pid, tmuxSession }: SupervisorPaneProps) {
     setSending(true);
     renderLog.debug("supervisor send", text.slice(0, 40));
     try {
-      await sendSupervisorMessage(pid, text);
+      injectLocalSupervisorMessage(pid, "human", text);
       setInput("");
+      await sendSupervisorMessage(pid, text);
     } catch (err) {
       apiLog.error("supervisor send failed", err);
     } finally {

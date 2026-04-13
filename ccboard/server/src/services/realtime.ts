@@ -20,6 +20,8 @@ import {
 } from "./action-extractor.js";
 import { isTmuxPaneWaiting } from "./tmux.js";
 import { normaliseReport } from "./report-normaliser.js";
+import { listFeatures } from "./features.js";
+import type { Feature } from "./features.js";
 import {
   supervisors,
   reconnectSupervisor,
@@ -101,8 +103,19 @@ interface PaneStateData {
   } | null;
 }
 
+interface FeatureData {
+  slug: string;
+  status: "active" | "completed" | "paused";
+  branch: string;
+  created: string;
+  title: string;
+  description: string;
+  acceptanceCriteria: Array<{ text: string; done: boolean }>;
+  progress: Array<{ text: string; done: boolean }>;
+}
+
 type ServerEvent =
-  | { type: "snapshot"; seq: number; sessions: Session[]; messages: Record<string, ChatMessage[]>; actions: Record<string, ActionEventData[]>; reviews: Record<string, ReviewCategoryData[]>; supervisorStatus: Record<string, SupervisorStatusData>; context: Record<string, ContextInfo>; supervisorMessages: Record<string, ChatMessage[]>; supervisorActions: Record<string, ActionEventData[]>; pane: Record<string, PaneStateData> }
+  | { type: "snapshot"; seq: number; sessions: Session[]; messages: Record<string, ChatMessage[]>; actions: Record<string, ActionEventData[]>; reviews: Record<string, ReviewCategoryData[]>; supervisorStatus: Record<string, SupervisorStatusData>; context: Record<string, ContextInfo>; supervisorMessages: Record<string, ChatMessage[]>; supervisorActions: Record<string, ActionEventData[]>; pane: Record<string, PaneStateData>; features: Record<string, FeatureData[]>; activeFeature: Record<string, FeatureData | null> }
   | { type: "sessions:update"; seq: number; sessions: Session[] }
   | { type: "messages:new"; seq: number; pid: number; messages: ChatMessage[] }
   | { type: "actions:new"; seq: number; pid: number; actions: ActionEventData[] }
@@ -111,7 +124,8 @@ type ServerEvent =
   | { type: "supervisor:messages"; seq: number; pid: number; messages: ChatMessage[] }
   | { type: "supervisor:actions"; seq: number; pid: number; actions: ActionEventData[] }
   | { type: "context:update"; seq: number; pid: number; context: ContextInfo }
-  | { type: "pane:update"; seq: number; pid: number; pane: PaneStateData };
+  | { type: "pane:update"; seq: number; pid: number; pane: PaneStateData }
+  | { type: "features:update"; seq: number; pid: number; features: FeatureData[]; activeFeature: FeatureData | null };
 
 // ---------------------------------------------------------------------------
 // In-memory state
@@ -126,6 +140,8 @@ const contextMap = new Map<number, ContextInfo>();
 const supervisorMessagesMap = new Map<number, ChatMessage[]>();
 const supervisorActionsMap = new Map<number, ActionEventData[]>();
 const paneMap = new Map<number, PaneStateData>();
+const featuresMap = new Map<number, Feature[]>();
+const activeFeatureMap = new Map<number, Feature | null>();
 
 // Sequence counter + ring buffer for replay
 let seqCounter = 0;
@@ -191,6 +207,14 @@ export function getRealtimeSupervisorActions(pid: number): ActionEventData[] {
   return supervisorActionsMap.get(pid) ?? [];
 }
 
+export function getRealtimeFeatures(pid: number): Feature[] {
+  return featuresMap.get(pid) ?? [];
+}
+
+export function getRealtimeActiveFeature(pid: number): Feature | null {
+  return activeFeatureMap.get(pid) ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Socket.IO server
 // ---------------------------------------------------------------------------
@@ -202,6 +226,22 @@ function broadcast(event: ServerEvent): void {
   io?.emit("event", event);
 }
 
+function toFeatureData(f: Feature): FeatureData {
+  return {
+    slug: f.slug,
+    status: f.status,
+    branch: f.branch,
+    created: f.created,
+    title: f.title,
+    description: f.description,
+    acceptanceCriteria: f.acceptanceCriteria,
+    progress: f.progress,
+  };
+}
+
+// For features dedup
+const lastFeatureKeys = new Map<number, string>();
+
 function buildSnapshot(): ServerEvent {
   const messages: Record<string, ChatMessage[]> = {};
   const actions: Record<string, ActionEventData[]> = {};
@@ -211,6 +251,8 @@ function buildSnapshot(): ServerEvent {
   const supMessages: Record<string, ChatMessage[]> = {};
   const supActions: Record<string, ActionEventData[]> = {};
   const pane: Record<string, PaneStateData> = {};
+  const features: Record<string, FeatureData[]> = {};
+  const activeFeature: Record<string, FeatureData | null> = {};
 
   for (const s of currentSessions) {
     const pid = s.pid;
@@ -230,6 +272,10 @@ function buildSnapshot(): ServerEvent {
     if (sa) supActions[String(pid)] = sa;
     const p = paneMap.get(pid);
     if (p) pane[String(pid)] = p;
+    const feats = featuresMap.get(pid);
+    if (feats) features[String(pid)] = feats.map(toFeatureData);
+    const af = activeFeatureMap.get(pid);
+    activeFeature[String(pid)] = af ? toFeatureData(af) : null;
   }
 
   return {
@@ -244,6 +290,8 @@ function buildSnapshot(): ServerEvent {
     supervisorMessages: supMessages,
     supervisorActions: supActions,
     pane,
+    features,
+    activeFeature,
   };
 }
 
@@ -764,6 +812,33 @@ function watchPanes(): void {
   }
 }
 
+// --- Features watcher (every 10s per session) ---
+
+async function watchFeatures(): Promise<void> {
+  for (const session of currentSessions) {
+    const pid = session.pid;
+    try {
+      const allFeatures = await listFeatures(session.cwd);
+      const active = allFeatures.find((f) => f.status === "active") ?? null;
+
+      // Dedup: serialise slug+status for quick comparison
+      const featureKey = allFeatures.map((f) => `${f.slug}:${f.status}:${f.acceptanceCriteria.map((c) => c.done ? "1" : "0").join("")}`).join("|");
+      if (featureKey === lastFeatureKeys.get(pid)) continue;
+      lastFeatureKeys.set(pid, featureKey);
+
+      featuresMap.set(pid, allFeatures);
+      activeFeatureMap.set(pid, active);
+
+      const featureData = allFeatures.map(toFeatureData);
+      const activeData = active ? toFeatureData(active) : null;
+      broadcast({ type: "features:update", seq: nextSeq(), pid, features: featureData, activeFeature: activeData });
+      log.debug({ pid, count: allFeatures.length }, "features:update");
+    } catch {
+      // skip
+    }
+  }
+}
+
 // --- Cleanup stale PIDs ---
 
 function cleanupStalePids(): void {
@@ -779,6 +854,9 @@ function cleanupStalePids(): void {
       lastPaneKeys.delete(pid);
       paneMap.delete(pid);
       lastReviewMtimes.delete(pid);
+      featuresMap.delete(pid);
+      activeFeatureMap.delete(pid);
+      lastFeatureKeys.delete(pid);
       supJsonlPaths.delete(pid);
       supJsonlSizes.delete(pid);
       supervisorMessagesMap.delete(pid);
@@ -848,6 +926,7 @@ export function initRealtime(httpServer: HttpServer): SocketServer {
   intervals.push(setInterval(() => { void watchReviews(); }, 10000));
   intervals.push(setInterval(() => { void watchSupervisors(); }, 2000));
   intervals.push(setInterval(() => { watchPanes(); }, 500));
+  intervals.push(setInterval(() => { void watchFeatures(); }, 10000));
   intervals.push(setInterval(() => { cleanupStalePids(); }, 10000));
 
   // Initial load

@@ -37,16 +37,18 @@ export function ReviewRow({ category, onClick }: ReviewRowProps) {
         background: isVerdict ? "var(--orange-faint)" : "transparent",
         transition: "background 0.1s",
       }}
-      onMouseEnter={(e) =>
-        (e.currentTarget.style.background = isVerdict
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = isVerdict
           ? "rgba(245, 124, 37, 0.18)"
-          : "var(--bg-panel-hover)")
-      }
-      onMouseLeave={(e) =>
-        (e.currentTarget.style.background = isVerdict
+          : "rgba(245, 124, 37, 0.06)";
+        e.currentTarget.style.boxShadow = "inset 0 0 12px rgba(245, 124, 37, 0.05)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = isVerdict
           ? "var(--orange-faint)"
-          : "transparent")
-      }
+          : "transparent";
+        e.currentTarget.style.boxShadow = "none";
+      }}
     >
       <span
         style={{

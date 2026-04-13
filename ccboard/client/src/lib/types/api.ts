@@ -40,3 +40,14 @@ export interface SupervisorStatus {
   tmuxSession?: string;
   isWaiting?: boolean;
 }
+
+export interface Feature {
+  slug: string;
+  status: "active" | "completed" | "paused";
+  branch: string;
+  created: string;
+  title: string;
+  description: string;
+  acceptanceCriteria: Array<{ text: string; done: boolean }>;
+  progress: Array<{ text: string; done: boolean }>;
+}

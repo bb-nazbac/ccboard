@@ -6,6 +6,11 @@ import { SupervisorPane } from "../components/session/supervisor/SupervisorPane"
 import { MessagesPane } from "../components/session/messages/MessagesPane";
 import { ActionsPane } from "../components/session/actions/ActionsPane";
 import { ReviewsPane } from "../components/session/reviews/ReviewsPane";
+import { FeatureBar } from "../components/session/features/FeatureBar";
+import { NewFeatureModal } from "../components/session/features/NewFeatureModal";
+import { useActiveFeature, useFeatures } from "../lib/services/socket";
+import { completeFeature as apiCompleteFeature, activateFeature } from "../lib/services/api";
+import { apiLog } from "../lib/utils/logger";
 
 interface SessionProps {
   pid: number;
@@ -19,6 +24,9 @@ export function Session({ pid }: SessionProps) {
   const [rightWidth, setRightWidth] = useState(35);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  const [showNewFeature, setShowNewFeature] = useState(false);
+  const activeFeature = useActiveFeature(pid);
+  const allFeatures = useFeatures(pid);
   const currentSession = sessions.find((s) => s.pid === pid) || null;
   const supTmux = supervisorStatus?.tmuxSession ?? null;
   const supervisorStatusMap = useAllSupervisorStatuses();
@@ -33,6 +41,36 @@ export function Session({ pid }: SessionProps) {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
+
+  // Handle command palette feature events
+  useEffect(() => {
+    const onNewFeature = () => setShowNewFeature(true);
+    const onCompleteFeature = () => {
+      if (activeFeature) {
+        apiCompleteFeature(pid, activeFeature.slug)
+          .then(() => apiLog.info("feature completed via command palette"))
+          .catch((err) => apiLog.error("feature complete failed", err));
+      }
+    };
+    const onSwitchFeature = () => {
+      // Cycle to next non-active feature
+      const nonActive = allFeatures.filter((f) => f.status !== "active" && f.status !== "completed");
+      if (nonActive.length > 0 && nonActive[0]) {
+        activateFeature(pid, nonActive[0].slug)
+          .then(() => apiLog.info("feature switched via command palette"))
+          .catch((err) => apiLog.error("feature switch failed", err));
+      }
+    };
+
+    window.addEventListener("ccboard:new-feature", onNewFeature);
+    window.addEventListener("ccboard:complete-feature", onCompleteFeature);
+    window.addEventListener("ccboard:switch-feature", onSwitchFeature);
+    return () => {
+      window.removeEventListener("ccboard:new-feature", onNewFeature);
+      window.removeEventListener("ccboard:complete-feature", onCompleteFeature);
+      window.removeEventListener("ccboard:switch-feature", onSwitchFeature);
+    };
+  }, [pid, activeFeature, allFeatures]);
 
   // Resizable panes
   const startDragLeft = useCallback(
@@ -209,6 +247,14 @@ export function Session({ pid }: SessionProps) {
           <span>MSGS {context.totalMessages}</span>
           <span>{tokenPct.toFixed(0)}%</span>
         </div>
+      )}
+
+      {/* Feature bar */}
+      <FeatureBar pid={pid} onNewFeature={() => setShowNewFeature(true)} />
+
+      {/* New Feature Modal */}
+      {showNewFeature && (
+        <NewFeatureModal pid={pid} onClose={() => setShowNewFeature(false)} />
       )}
 
       {/* Three-pane layout */}

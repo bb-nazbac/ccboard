@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { sendMessage } from "../../../lib/services/api";
-import { useMessages, usePaneState } from "../../../lib/services/socket";
+import { useMessages, usePaneState, injectLocalMessage } from "../../../lib/services/socket";
 import { apiLog, renderLog } from "../../../lib/utils/logger";
 import { ChatMessage } from "./ChatMessage";
 
@@ -32,8 +32,10 @@ export function MessagesPane({ pid, tmuxSession, tty }: MessagesPaneProps) {
     setSending(true);
     renderLog.debug("agent send", text.slice(0, 40));
     try {
-      await sendMessage(pid, text);
+      // Optimistically show the message immediately
+      injectLocalMessage(pid, "human", text);
       setInput("");
+      await sendMessage(pid, text);
     } catch (err) {
       apiLog.error("agent send failed", err);
     } finally {
@@ -107,7 +109,7 @@ export function MessagesPane({ pid, tmuxSession, tty }: MessagesPaneProps) {
               placeholder="Send to agent..."
               style={{
                 flex: 1, background: "rgba(10,10,10,0.8)", border: "1px solid var(--border-neutral)",
-                color: "var(--text-bright)", fontFamily: "var(--font-body)", fontSize: "0.8rem",
+                color: "#FFFFFF", fontFamily: "var(--font-body)", fontSize: "0.8rem",
                 padding: "0.4rem 0.6rem", outline: "none",
               }}
             />

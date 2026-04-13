@@ -110,10 +110,6 @@ router.get("/:pid/context", async (req, res) => {
 router.post("/:pid/send", async (req, res) => {
   const session = await findSession(Number(req.params.pid));
   if (!session) { res.status(404).json({ error: "session not found" }); return; }
-  if (session.status !== "waiting") {
-    res.status(400).json({ error: "session is not waiting for input" });
-    return;
-  }
 
   const body = req.body as Record<string, unknown>;
   const message = body.message;

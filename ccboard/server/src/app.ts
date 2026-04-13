@@ -8,6 +8,7 @@ import launchRouter from "./routes/launch.js";
 import reviewsRouter from "./routes/reviews.js";
 import sseRouter from "./routes/sse.js";
 import supervisorRouter from "./routes/supervisor.js";
+import featuresRouter from "./routes/features.js";
 import { backfillAllPairings } from "./services/pairing.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -32,6 +33,7 @@ app.use("/api/sessions", reviewsRouter);
 app.use("/api", launchRouter);
 app.use("/api/sessions", supervisorRouter);
 app.use("/api/sessions", sseRouter);
+app.use("/api/sessions", featuresRouter);
 
 // Static files — serve the Vite build output in server/public/
 const publicDir = join(__dirname, "..", "public");

@@ -1,7 +1,7 @@
 import type { Session } from "../types/session";
 import type { ContextInfo } from "../types/session";
 import type { ReviewCategory } from "../types/reports";
-import type { ChatMessage, ActionTurn, ResumableSession, SupervisorStatus } from "../types/api";
+import type { ChatMessage, ActionTurn, ResumableSession, SupervisorStatus, Feature } from "../types/api";
 import { apiLog } from "../utils/logger";
 
 async function get<T>(path: string): Promise<T> {
@@ -11,6 +11,17 @@ async function get<T>(path: string): Promise<T> {
   const data = await res.json() as T;
   apiLog.debug("GET done", path);
   return data;
+}
+
+async function put<T>(path: string, body: unknown): Promise<T> {
+  apiLog.debug("PUT", path, body);
+  const res = await fetch(path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) { apiLog.error("PUT failed", path, res.status); throw new Error(`PUT ${path}: ${res.status}`); }
+  return res.json() as Promise<T>;
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
@@ -48,3 +59,15 @@ export const getReviews = (pid: number) =>
 export const getResumable = () => get<ResumableSession[]>("/api/resumable");
 export const launchSession = (cwd: string, opts?: { resume?: boolean; sessionId?: string }) =>
   post<{ ok: boolean; error?: string }>("/api/launch", { cwd, ...opts });
+
+// Features
+export const getFeatures = (pid: number) => get<Feature[]>(`/api/sessions/${pid}/features`);
+export const getActiveFeature = (pid: number) => get<Feature | null>(`/api/sessions/${pid}/features/active`);
+export const createFeature = (pid: number, data: { slug: string; title: string; description: string; acceptanceCriteria: string[]; branch?: string }) =>
+  post<Feature>(`/api/sessions/${pid}/features`, data);
+export const updateFeature = (pid: number, slug: string, content: string) =>
+  put<Feature>(`/api/sessions/${pid}/features/${slug}`, { content });
+export const completeFeature = (pid: number, slug: string) =>
+  post<{ ok: boolean }>(`/api/sessions/${pid}/features/${slug}/complete`, {});
+export const activateFeature = (pid: number, slug: string) =>
+  post<{ ok: boolean }>(`/api/sessions/${pid}/features/${slug}/activate`, {});

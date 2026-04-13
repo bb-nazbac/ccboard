@@ -6,7 +6,7 @@
 import { io, Socket } from "socket.io-client";
 import { useSyncExternalStore, useCallback } from "react";
 import type { Session, ContextInfo } from "../types/session";
-import type { ChatMessage, SupervisorStatus } from "../types/api";
+import type { ChatMessage, SupervisorStatus, Feature } from "../types/api";
 import type { ReviewCategory } from "../types/reports";
 import type { ActionEvent, PaneEvent } from "../types/sse-events";
 import { sseLog } from "../utils/logger";
@@ -32,6 +32,8 @@ interface Store {
   supervisorActions: Map<number, ActionEventData[]>;
   context: Map<number, ContextInfo>;
   pane: Map<number, PaneState>;
+  features: Map<number, Feature[]>;
+  activeFeature: Map<number, Feature | null>;
   connected: boolean;
   lastSeq: number;
 }
@@ -46,6 +48,8 @@ const store: Store = {
   supervisorActions: new Map(),
   context: new Map(),
   pane: new Map(),
+  features: new Map(),
+  activeFeature: new Map(),
   connected: false,
   lastSeq: 0,
 };
@@ -104,7 +108,7 @@ interface PaneStateData {
 }
 
 type ServerEvent =
-  | { type: "snapshot"; seq: number; sessions: Session[]; messages: Record<string, ChatMessage[]>; actions: Record<string, ActionEventData[]>; reviews: Record<string, ReviewCategoryData[]>; supervisorStatus: Record<string, SupervisorStatusData>; context: Record<string, ContextInfo>; supervisorMessages: Record<string, ChatMessage[]>; supervisorActions: Record<string, ActionEventData[]>; pane: Record<string, PaneStateData> }
+  | { type: "snapshot"; seq: number; sessions: Session[]; messages: Record<string, ChatMessage[]>; actions: Record<string, ActionEventData[]>; reviews: Record<string, ReviewCategoryData[]>; supervisorStatus: Record<string, SupervisorStatusData>; context: Record<string, ContextInfo>; supervisorMessages: Record<string, ChatMessage[]>; supervisorActions: Record<string, ActionEventData[]>; pane: Record<string, PaneStateData>; features: Record<string, Feature[]>; activeFeature: Record<string, Feature | null> }
   | { type: "sessions:update"; seq: number; sessions: Session[] }
   | { type: "messages:new"; seq: number; pid: number; messages: ChatMessage[] }
   | { type: "actions:new"; seq: number; pid: number; actions: ActionEventData[] }
@@ -113,7 +117,8 @@ type ServerEvent =
   | { type: "supervisor:messages"; seq: number; pid: number; messages: ChatMessage[] }
   | { type: "supervisor:actions"; seq: number; pid: number; actions: ActionEventData[] }
   | { type: "context:update"; seq: number; pid: number; context: ContextInfo }
-  | { type: "pane:update"; seq: number; pid: number; pane: PaneStateData };
+  | { type: "pane:update"; seq: number; pid: number; pane: PaneStateData }
+  | { type: "features:update"; seq: number; pid: number; features: Feature[]; activeFeature: Feature | null };
 
 // ---------------------------------------------------------------------------
 // Helpers to convert server data to client types
@@ -192,6 +197,8 @@ function handleEvent(event: ServerEvent): void {
       store.supervisorActions = new Map();
       store.context = new Map();
       store.pane = new Map();
+      store.features = new Map();
+      store.activeFeature = new Map();
 
       for (const [pidStr, msgs] of Object.entries(event.messages)) {
         store.messages.set(Number(pidStr), msgs);
@@ -216,6 +223,12 @@ function handleEvent(event: ServerEvent): void {
       }
       for (const [pidStr, p] of Object.entries(event.pane)) {
         store.pane.set(Number(pidStr), toPaneState(p));
+      }
+      for (const [pidStr, feats] of Object.entries(event.features ?? {})) {
+        store.features.set(Number(pidStr), feats);
+      }
+      for (const [pidStr, af] of Object.entries(event.activeFeature ?? {})) {
+        store.activeFeature.set(Number(pidStr), af);
       }
       sseLog.info("snapshot received", { sessions: event.sessions.length });
       break;
@@ -258,6 +271,10 @@ function handleEvent(event: ServerEvent): void {
       break;
     case "pane:update":
       store.pane.set(event.pid, toPaneState(event.pane));
+      break;
+    case "features:update":
+      store.features.set(event.pid, event.features);
+      store.activeFeature.set(event.pid, event.activeFeature);
       break;
   }
 
@@ -312,6 +329,7 @@ export function initSocket(): void {
 const EMPTY_MESSAGES: ChatMessage[] = [];
 const EMPTY_ACTIONS: ActionEvent[] = [];
 const EMPTY_REVIEWS: ReviewCategory[] = [];
+const EMPTY_FEATURES: Feature[] = [];
 
 export function useSessions(): Session[] {
   return useSyncExternalStore(subscribe, () => store.sessions);
@@ -362,6 +380,30 @@ export function usePaneState(pid: number): PaneState | null {
   return useSyncExternalStore(subscribe, getSnapshot);
 }
 
+export function useFeatures(pid: number): Feature[] {
+  const getSnapshot = useCallback(() => store.features.get(pid) ?? EMPTY_FEATURES, [pid]);
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+export function useActiveFeature(pid: number): Feature | null {
+  const getSnapshot = useCallback(() => store.activeFeature.get(pid) ?? null, [pid]);
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
 export function useConnected(): boolean {
   return useSyncExternalStore(subscribe, () => store.connected);
+}
+
+/** Optimistically add a message to the local store (before the server confirms via WebSocket) */
+export function injectLocalMessage(pid: number, role: "human" | "assistant", text: string): void {
+  const existing = store.messages.get(pid) ?? [];
+  store.messages.set(pid, [...existing, { role, text, timestamp: new Date().toISOString() }]);
+  notify();
+}
+
+/** Optimistically add a supervisor message to the local store */
+export function injectLocalSupervisorMessage(pid: number, role: "human" | "assistant", text: string): void {
+  const existing = store.supervisorMessages.get(pid) ?? [];
+  store.supervisorMessages.set(pid, [...existing, { role, text, timestamp: new Date().toISOString() }]);
+  notify();
 }
